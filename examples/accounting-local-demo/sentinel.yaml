@@ -1,0 +1,58 @@
+agent:
+  url: { env: AZURE_OPENAI_ENDPOINT }
+  model: { env: AZURE_OPENAI_MODEL }
+service:
+  profile: demo
+  database:
+    kind: file
+    path: secrets/postgres.connection-string
+  a2a:
+    authentication:
+      mode: anonymous
+sources:
+  - id: accounting-ledger
+    kind: postgres
+    config:
+      host: 127.0.0.1
+      port: 5432
+      database: sentinel
+      user: sentinel
+      password:
+        kind: file
+        path: secrets/postgres.password
+      tables: [invoices]
+      slotName: drasi_accounting_slot
+      publicationName: drasi_accounting_publication
+      sslMode: disable
+      tableKeys:
+        - table: invoices
+          keyColumns: [invoice_id]
+    bootstrap:
+      kind: postgres
+      host: 127.0.0.1
+      port: 5432
+      database: sentinel
+      user: sentinel
+      password:
+        kind: file
+        path: secrets/postgres.password
+      tables: [invoices]
+      slotName: drasi_accounting_slot
+      publicationName: drasi_accounting_publication
+      sslMode: disable
+      tableKeys:
+        - table: invoices
+          keyColumns: [invoice_id]
+queries:
+  - id: invoice-paid
+    description: Reports every invoice change.
+    cypher: >-
+      MATCH (invoice:invoices)
+      RETURN invoice.account_id AS account_id,
+             invoice.invoice_id AS invoice_id,
+             invoice.amount AS amount,
+             invoice.paid AS paid
+    sources: [accounting-ledger]
+    reactions: [notify-account-owner]
+reactions:
+  - id: notify-account-owner

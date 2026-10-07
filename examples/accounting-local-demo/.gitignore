@@ -1,0 +1,9 @@
+secrets/*
+!secrets/.gitignore
+!secrets/*.example
+
+secrets/a2a-inspector-connection.txt
+secrets/a2a-streaming-events.sse
+secrets/a2a-streaming-replay.sse
+secrets/a2a-streaming-demo.log
+/libdrasi_*.dylib

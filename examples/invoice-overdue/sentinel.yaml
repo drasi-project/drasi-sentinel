@@ -1,0 +1,67 @@
+agent:
+  url: { env: AZURE_OPENAI_ENDPOINT }
+  model: { env: AZURE_OPENAI_MODEL }
+service:
+  profile: production
+  database:
+    kind: file
+    path: secrets/postgres.connection-string
+  a2a:
+    authentication:
+      mode: jwt
+      issuer: https://issuer.example.test/
+      audience: drasi-sentinel
+      public_key:
+        kind: file
+        path: secrets/a2a-public-key.pem
+sources:
+  - id: invoices
+    kind: postgres
+    config:
+      host: 127.0.0.1
+      port:
+        kind: file
+        path: secrets/postgres.cdc-port
+      database: sentinel
+      user: sentinel_cdc
+      password:
+        kind: file
+        path: secrets/postgres.cdc-password
+      tables: [invoices]
+      slotName: drasi_invoice_slot
+      publicationName: drasi_invoice_publication
+      sslMode: disable
+      tableKeys:
+        - table: invoices
+          keyColumns: [id]
+    bootstrap:
+      kind: postgres
+      host: 127.0.0.1
+      port:
+        kind: file
+        path: secrets/postgres.cdc-port
+      database: sentinel
+      user: sentinel_cdc
+      password:
+        kind: file
+        path: secrets/postgres.cdc-password
+      tables: [invoices]
+      slotName: drasi_invoice_slot
+      publicationName: drasi_invoice_publication
+      sslMode: disable
+      tableKeys:
+        - table: invoices
+          keyColumns: [id]
+queries:
+  - id: overdue-invoices
+    description: Finds open invoices whose due date has passed.
+    cypher: >-
+      MATCH (invoice:Invoice)
+      WHERE invoice.status = 'open' AND invoice.due_date < datetime()
+      RETURN invoice.id AS invoice_id,
+             invoice.account_id AS account_id,
+             invoice.due_date AS due_date
+    sources: [invoices]
+    reactions: [notify-account]
+reactions:
+  - id: notify-account

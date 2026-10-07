@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Drasi.Sentinel.Agent.Maf/Drasi.Sentinel.Agent.Maf.csproj" />
+    <Project Path="src/Drasi.Sentinel.Application/Drasi.Sentinel.Application.csproj" />
+    <Project Path="src/Drasi.Sentinel.Domain/Drasi.Sentinel.Domain.csproj" />
+    <Project Path="src/Drasi.Sentinel.Host/Drasi.Sentinel.Host.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Drasi.Sentinel.Tests/Drasi.Sentinel.Tests.csproj" />
+  </Folder>
+</Solution>
