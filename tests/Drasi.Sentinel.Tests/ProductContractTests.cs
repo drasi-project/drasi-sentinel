@@ -45,7 +45,8 @@ public sealed class ProductContractTests
             AgentCard.Create(
                 ServiceProfile.Demo,
                 new A2aAnonymousManifest(),
-                new Uri("http://127.0.0.1:8080/"))));
+                new Uri("http://127.0.0.1:8080/"),
+                EmptyCatalog())));
 
         var root = card.RootElement;
         Assert.True(root.GetProperty("capabilities").GetProperty("streaming").GetBoolean());
@@ -68,6 +69,42 @@ public sealed class ProductContractTests
 
         Assert.True(violations.Length == 0, string.Join(Environment.NewLine, violations));
     }
+
+    [Fact]
+    public void Agent_card_skills_are_curated_queries()
+    {
+        var queryId = new QueryId("open-orders");
+        var catalog = new SafeCatalog(
+            new Dictionary<QueryId, QueryCatalogItem>
+            {
+                [queryId] = new(queryId, "Reports open orders.", new HashSet<ReactionId>(), ["Tell me when an order is open."]),
+            },
+            new Dictionary<ReactionId, ReactionCatalogItem>());
+
+        using var card = JsonDocument.Parse(JsonSerializer.Serialize(
+            AgentCard.Create(ServiceProfile.Demo, new A2aAnonymousManifest(), new Uri("http://127.0.0.1:8080/"), catalog)));
+        var skills = card.RootElement.GetProperty("skills").EnumerateArray().ToArray();
+
+        Assert.Equal(2, skills.Length);
+        Assert.Equal("open-orders", skills[0].GetProperty("id").GetString());
+        Assert.Equal("Open Orders", skills[0].GetProperty("name").GetString());
+        Assert.Equal("Reports open orders. This is a change watch, not a one-shot answer. Sending an example opens one task. Later changes arrive on that task as JSON artifacts. Follow the card description.", skills[0].GetProperty("description").GetString());
+        var description = card.RootElement.GetProperty("description").GetString();
+        Assert.Contains("message/stream", description);
+        Assert.Contains("tasks/subscribe", description);
+        Assert.Contains("native_query_diff", description);
+        Assert.DoesNotContain("message/stream", skills[0].GetProperty("description").GetString());
+        Assert.Contains("not a second watch", skills[1].GetProperty("description").GetString());
+        Assert.Contains("continuous-query", skills[0].GetProperty("tags").EnumerateArray().Select(tag => tag.GetString()));
+        Assert.Equal("Tell me when an order is open.", skills[0].GetProperty("examples")[0].GetString());
+        Assert.Equal("current-task-results", skills[1].GetProperty("id").GetString());
+        Assert.Contains("task", skills[1].GetProperty("tags").EnumerateArray().Select(tag => tag.GetString()));
+        Assert.DoesNotContain(skills, skill => skill.GetProperty("id").GetString() == "governed-change-subscriptions");
+    }
+
+    private static SafeCatalog EmptyCatalog() => new(
+        new Dictionary<QueryId, QueryCatalogItem>(),
+        new Dictionary<ReactionId, ReactionCatalogItem>());
 
     private static string FindRepositoryRoot()
     {

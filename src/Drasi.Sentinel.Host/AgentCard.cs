@@ -1,3 +1,5 @@
+using Drasi.Sentinel.Domain;
+
 namespace Drasi.Sentinel.Host;
 
 public static class AgentCard
@@ -5,20 +7,21 @@ public static class AgentCard
     public static object Create(
         ServiceProfile profile,
         A2aAuthenticationManifest authentication,
-        Uri publicBaseUri) =>
+        Uri publicBaseUri,
+        SafeCatalog catalog) =>
         authentication switch
         {
-            A2aJwtManifest => Protected(publicBaseUri, authentication),
-            A2aAnonymousManifest when profile == ServiceProfile.Demo => Anonymous(publicBaseUri, authentication),
+            A2aJwtManifest => Protected(publicBaseUri, authentication, catalog),
+            A2aAnonymousManifest when profile == ServiceProfile.Demo => Anonymous(publicBaseUri, catalog),
             A2aAnonymousManifest => throw new ArgumentException(
                 "Anonymous A2A authentication is only valid for the demo profile.",
                 nameof(profile)),
             _ => throw new ArgumentOutOfRangeException(nameof(authentication)),
         };
 
-    private static object Protected(Uri publicBaseUri, A2aAuthenticationManifest authentication)
+    private static object Protected(Uri publicBaseUri, A2aAuthenticationManifest authentication, SafeCatalog catalog)
     {
-        var card = Card(publicBaseUri, authentication);
+        var card = Card(publicBaseUri, catalog);
         card["securitySchemes"] = new
         {
             bearerAuth = new { type = "http", scheme = "bearer", bearerFormat = "JWT" },
@@ -30,14 +33,12 @@ public static class AgentCard
         return card;
     }
 
-    private static object Anonymous(Uri publicBaseUri, A2aAuthenticationManifest authentication) => Card(publicBaseUri, authentication);
+    private static object Anonymous(Uri publicBaseUri, SafeCatalog catalog) => Card(publicBaseUri, catalog);
 
-    private static Dictionary<string, object> Card(Uri publicBaseUri, A2aAuthenticationManifest authentication) => new()
+    private static Dictionary<string, object> Card(Uri publicBaseUri, SafeCatalog catalog) => new()
     {
         ["name"] = "Drasi Sentinel",
-        ["description"] =
-            "Governed A2A assistant for subscriptions to curated Drasi continuous queries. " +
-            "It provides curated, governed change subscriptions and current task-bound results.",
+        ["description"] = ConsumerContract,
         ["version"] = "0.1.0",
         ["protocolVersion"] = "1.0",
         ["supportedInterfaces"] = new[]
@@ -51,22 +52,63 @@ public static class AgentCard
         },
         ["capabilities"] = new { streaming = true, pushNotifications = false },
         ["defaultInputModes"] = new[] { "text/plain" },
-        ["defaultOutputModes"] = new[] { "text/plain" },
-        ["skills"] = new[]
-        {
-            new
-            {
-                id = "governed-change-subscriptions",
-                name = "Governed change subscriptions",
-                description = "Create immediate catalog-governed subscriptions that report on the A2A task stream.",
-            },
-            new
-            {
-                id = "task-subscription-lifecycle",
-                name = "Task subscription lifecycle",
-                description = "List, cancel, or retrieve current results for the curated subscription owned by the current conversation task.",
-            },
-        },
+        ["defaultOutputModes"] = new[] { "text/plain", "application/json" },
+        ["skills"] = Skills(catalog),
     };
 
+    private static object[] Skills(SafeCatalog catalog)
+    {
+        var skills = catalog.Queries.Values
+            .OrderBy(query => query.Id.Value, StringComparer.Ordinal)
+            .Select(QuerySkill)
+            .Cast<object>()
+            .ToList();
+        skills.Add(new
+        {
+            id = "current-task-results",
+            name = "Current task results",
+            description = CurrentResultsDescription,
+            tags = new[] { "task", "current-results" },
+            examples = new[] { "What are the current results for this task?" },
+            inputModes = new[] { "text/plain" },
+            outputModes = new[] { "text/plain", "application/json" },
+        });
+        return [.. skills];
+    }
+
+    private static object QuerySkill(QueryCatalogItem query) => new
+    {
+        id = query.Id.Value,
+        name = SkillName(query.Id.Value),
+        description = $"{query.Description} {WatchNotice}",
+        tags = new[] { "continuous-query", query.Id.Value },
+        examples = query.Examples,
+        inputModes = new[] { "text/plain" },
+        outputModes = new[] { "text/plain", "application/json" },
+    };
+
+    private const string ConsumerContract =
+        "One change watch is one durable A2A task and one curated subscription. A second watch needs a new task. Sending another watch on the same task is rejected.\n\n" +
+        "Read this description once, then pick a skill. A skill tagged continuous-query is one watch. Its description says what is watched. Its examples are the utterances that select it. Send one example as the whole user text. Do not send the skill id, a reaction id, Cypher, a source name, a filter, a confirmation code, a destination, or a webhook. The host binds one curated reaction. You do not choose it.\n\n" +
+        "The skill current-task-results is not a watch. Send its example only on the task a watch already opened. It returns the current rows for that task's query.\n\n" +
+        "POST JSON-RPC 2.0 to the url of the supportedInterfaces entry whose protocolBinding is JSONRPC. Use Content-Type application/json and Accept text/event-stream. capabilities.streaming is true and capabilities.pushNotifications is false. Do not register a push URL. Use method message/stream to send a message. Use method tasks/subscribe to reconnect. Do not use message/send.\n\n" +
+        "To open a watch, choose a taskId and a messageId. POST method message/stream. Set message.role to user, message.taskId to that taskId, and message.messageId to that messageId. message.parts must be one object whose mediaType is text/plain and whose text is one example from the chosen skill. Keep the response open. Later changes arrive on this stream.\n\n" +
+        "Each SSE event has an id line and a data line. The id is a decimal sequence. Keep the last id you applied. data is a JSON-RPC result. Read result.kind.\n\n" +
+        "A status-update is not a change. An artifact-update is an output. A change is a part whose kind is data and whose data.type is native_query_diff. diffType Add means the row entered the result set. diffType Update means a row still in the set changed. diffType Delete means the row left the result set. data is the row when present. before and after are present only when the host supplied them. Do not send another request to fill a missing field. Text parts are status, not changes.\n\n" +
+        "If the stream drops, POST method tasks/subscribe with the same taskId. Set the Last-Event-ID header to the last SSE id you applied. Events after that id are replayed, then the stream waits. Omit the header only to replay from the start.\n\n" +
+        "To read current rows, POST message/stream on the same taskId with a new messageId and the current-task-results example as the only text part. The output is an artifact-update data part whose type is current_query_results. It contains rows. It does not replace later native_query_diff events.";
+
+    private const string WatchNotice =
+        "This is a change watch, not a one-shot answer. Sending an example opens one task. Later changes arrive on that task as JSON artifacts. Follow the card description.";
+
+    private const string CurrentResultsDescription =
+        "This is not a second watch. Send an example on the task a watch already opened. The reply is the current rows for that task's query. Follow the card description.";
+
+    private static string SkillName(string id)
+    {
+        var words = id.Split(['-', '_'], StringSplitOptions.RemoveEmptyEntries);
+        return words.Length == 0
+            ? id
+            : string.Join(' ', words.Select(word => char.ToUpperInvariant(word[0]) + word[1..]));
+    }
 }

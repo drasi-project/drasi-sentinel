@@ -14,6 +14,7 @@ public interface IConversationRepository
     Task SaveSubscriptionAsync(ConversationSubscription subscription, CancellationToken cancellationToken);
     Task<ConversationEvent> AppendEventAsync(OwnerId owner, ConversationEvent eventToAppend, CancellationToken cancellationToken);
     Task<IReadOnlyList<ConversationEvent>> ReadEventsAsync(OwnerId owner, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken);
+    Task<TaskEventSequence> ReadLatestEventSequenceAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
     Task AppendAssistantArtifactAsync(Principal principal, ConversationTaskId taskId, string content, CancellationToken cancellationToken);
 }
 
@@ -96,6 +97,14 @@ public sealed class InMemorySentinelRepository : IConversationRepository
         var events = _events.TryGetValue((owner, taskId), out var journal) ? journal : [];
         lock (events)
             return Task.FromResult<IReadOnlyList<ConversationEvent>>(events.Where(x => x.Sequence.Value > after.Value).Take(limit).ToArray());
+    }
+
+    public Task<TaskEventSequence> ReadLatestEventSequenceAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken)
+    {
+        if (!_tasks.ContainsKey((owner, taskId))) throw new SentinelException("task_not_found", "The task does not exist.");
+        var events = _events.TryGetValue((owner, taskId), out var journal) ? journal : [];
+        lock (events)
+            return Task.FromResult(events.Count == 0 ? new TaskEventSequence(0) : events[^1].Sequence);
     }
 
     public async Task AppendAssistantArtifactAsync(Principal principal, ConversationTaskId taskId, string content, CancellationToken cancellationToken)
@@ -223,6 +232,17 @@ public sealed class PostgresSentinelRepository : IConversationRepository, IAsync
         var result = new List<ConversationEvent>(); await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken)) result.Add(new(taskId, new(reader.GetInt64(0)), Enum.Parse<ConversationEventKind>(reader.GetString(1)), reader.IsDBNull(2) ? null : new(reader.GetGuid(2)), reader.GetString(3), reader.GetFieldValue<DateTimeOffset>(4)));
         return result;
+    }
+    public async Task<TaskEventSequence> ReadLatestEventSequenceAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("""
+            SELECT COALESCE(MAX(sequence), 0) FROM sentinel_task_events WHERE owner_id=@owner AND task_id=@task;
+            """, connection);
+        command.Parameters.AddWithValue("owner", owner.Value);
+        command.Parameters.AddWithValue("task", taskId.Value);
+        var scalar = await command.ExecuteScalarAsync(cancellationToken);
+        return new(scalar is null or DBNull ? 0 : Convert.ToInt64(scalar));
     }
     public async Task AppendAssistantArtifactAsync(Principal principal, ConversationTaskId taskId, string content, CancellationToken cancellationToken)
     {

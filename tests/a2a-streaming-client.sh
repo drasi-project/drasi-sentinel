@@ -77,9 +77,11 @@ request_current_results() {
 	grep -F '"subscriptionId":' "$output" >/dev/null
 	grep -F '"queryId":"invoice-paid"' "$output" >/dev/null
 	grep -F '"rows":[' "$output" >/dev/null
-	awk -v amount="$expected_amount" \
-		'index($0, "\"type\":\"current_query_results\"") && index($0, "\"amount\":" amount) { found = 1 } END { exit !found }' \
-		"$output"
+	if [[ -n "$expected_amount" ]]; then
+		awk -v amount="$expected_amount" \
+			'index($0, "\"type\":\"current_query_results\"") && index($0, "\"amount\":" amount) { found = 1 } END { exit !found }' \
+			"$output"
+	fi
 }
 
 assert_diff_count() {
@@ -114,16 +116,21 @@ ENDPOINT="$(awk -F= '$1=="agent_endpoint" {print $2}' "$CONNECTION")"
 curl --no-buffer --silent --show-error --max-time 120 \
 	-H 'Content-Type: application/json' \
 	-X POST "$ENDPOINT" \
-	--data "{\"jsonrpc\":\"2.0\",\"id\":\"live-send\",\"method\":\"SendStreamingMessage\",\"params\":{\"message\":{\"role\":\"ROLE_USER\",\"taskId\":\"$TASK_ID\",\"messageId\":\"request-$TASK_ID\",\"parts\":[{\"text\":\"Tell me whenever an invoice changes.\",\"mediaType\":\"text/plain\"}]}}}" \
+	--data "{\"jsonrpc\":\"2.0\",\"id\":\"live-send\",\"method\":\"SendStreamingMessage\",\"params\":{\"message\":{\"role\":\"ROLE_USER\",\"taskId\":\"$TASK_ID\",\"messageId\":\"request-$TASK_ID\",\"parts\":[{\"text\":\"Tell me when an invoice is paid.\",\"mediaType\":\"text/plain\"}]}}}" \
 	>"$EVENTS" &
 stream_pid=$!
 wait_for_active_subscription || { cat "$EVENTS" >&2; exit 1; }
-request_current_results "$CURRENT_BEFORE" "current-before-$TASK_ID" 12500
+request_current_results "$CURRENT_BEFORE" "current-before-$TASK_ID" ""
+awk 'index($0, "\"type\":\"current_query_results\"") && index($0, "invoice-demo-001") { found = 1 } END { exit found }' \
+	"$CURRENT_BEFORE"
 docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
 	-c "UPDATE invoices SET paid = true, amount = 12501 WHERE invoice_id = 'invoice-demo-001'" >/dev/null
 sleep 3
 docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
-	-c "UPDATE invoices SET paid = false, amount = 12502 WHERE invoice_id = 'invoice-demo-001'" >/dev/null
+	-c "UPDATE invoices SET amount = 12502 WHERE invoice_id = 'invoice-demo-001'" >/dev/null
+sleep 3
+docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
+	-c "UPDATE invoices SET paid = false WHERE invoice_id = 'invoice-demo-001'" >/dev/null
 sleep 3
 docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
 	-c "DELETE FROM invoices WHERE invoice_id = 'invoice-demo-001'" >/dev/null
@@ -133,20 +140,19 @@ docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sent
 sleep 3
 docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
 	-c "UPDATE invoices SET paid = true, amount = 15001 WHERE invoice_id = 'invoice-demo-001'" >/dev/null
-wait_for_diffs 5 || { cat "$EVENTS" >&2; exit 1; }
+wait_for_diffs 4 || { cat "$EVENTS" >&2; exit 1; }
 request_current_results "$CURRENT_AFTER" "current-after-$TASK_ID" 15001
-assert_diff_count 5
-assert_diff_type_count Update 3
+awk 'index($0, "\"type\":\"current_query_results\"") && index($0, "12502") { found = 1 } END { exit found }' \
+	"$CURRENT_AFTER"
+assert_diff_count 4
+assert_diff_type_count Update 1
 assert_diff_type_count Delete 1
-assert_diff_type_count Add 1
-grep -F '"before":{"account_id":"account-200","amount":12500,"invoice_id":"invoice-demo-001","paid":false}' "$REPLAY" >/dev/null
-grep -F '"after":{"account_id":"account-200","amount":12501,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
+assert_diff_type_count Add 2
+grep -F '"data":{"account_id":"account-200","amount":12501,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
 grep -F '"before":{"account_id":"account-200","amount":12501,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
 grep -F '"after":{"account_id":"account-200","amount":12502,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
 grep -F '"data":{"account_id":"account-200","amount":12502,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
-grep -F '"data":{"account_id":"account-300","amount":15000,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
-grep -F '"before":{"account_id":"account-300","amount":15000,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
-grep -F '"after":{"account_id":"account-300","amount":15001,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
+grep -F '"data":{"account_id":"account-300","amount":15001,"invoice_id":"invoice-demo-001","paid":true}' "$REPLAY" >/dev/null
 
 kill "$stream_pid" >/dev/null 2>&1 || true
 wait "$stream_pid" 2>/dev/null || true
@@ -163,4 +169,4 @@ grep -F 'id: 2' "$REPLAY" >/dev/null
 grep -F '"artifactUpdate"' "$REPLAY" >/dev/null
 grep -F '"data":{"type":"native_query_diff"' "$REPLAY" >/dev/null
 grep -F '"diffType":"Update"' "$REPLAY" >/dev/null
-printf 'Live A2A SSE delivers current results before and after five typed PostgreSQL query diffs, then replays them.\n'
+printf 'Live A2A SSE delivers current results before and after four typed PostgreSQL query diffs, then replays them.\n'

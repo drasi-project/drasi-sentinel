@@ -94,7 +94,8 @@ public sealed class NativeQueryDiff
 public sealed record QueryCatalogItem(
     QueryId Id,
     string Description,
-    IReadOnlySet<ReactionId> AllowedReactions);
+    IReadOnlySet<ReactionId> AllowedReactions,
+    IReadOnlyList<string> Examples);
 
 public sealed record ReactionCatalogItem(ReactionId Id);
 

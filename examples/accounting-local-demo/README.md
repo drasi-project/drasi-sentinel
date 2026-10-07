@@ -14,7 +14,7 @@ the demo.
 In Inspector send a message and ask:
 
 ```text
-Tell me whenever an invoice changes.
+Tell me when an invoice is paid.
 ```
 
 The card exposes standard JSON-RPC/SSE. After the card connects, click
@@ -24,7 +24,8 @@ update. To reconnect to a known working task, click **Resume task stream**,
 which uses standard A2A `SubscribeToTask`. When the demo tells you that the
 subscription is active, run its printed
 `docker exec ... UPDATE invoices` command in another terminal. That update
-changes the seeded invoice and drives PostgreSQL CDC. Each native result diff
+marks the seeded unpaid invoice paid, which adds it to the result set, and
+drives PostgreSQL CDC. Each native result diff
 is delivered as an A2A JSON data artifact, retaining its type and raw JSON
 data, before/after values, grouping keys, and metadata when supplied. You can
 also run the standard streaming test client from the repository root:

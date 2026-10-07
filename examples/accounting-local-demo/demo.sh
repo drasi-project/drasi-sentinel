@@ -70,7 +70,9 @@ fi
 }
 
 trap cleanup EXIT INT TERM
+printf 'Preparing local PostgreSQL.\n'
 "$BOOTSTRAP" start >/dev/null
+printf 'Starting Sentinel and A2A Inspector.\n'
 rm -f "$SENTINEL_CONNECTION"
 host_url="http://127.0.0.1:$(choose_port)"
 (
@@ -112,7 +114,7 @@ Connect A2A Inspector to:
   Agent endpoint: $host_url/a2a/
 
 In A2A Inspector, click Send streaming and ask:
-  Tell me whenever an invoice changes.
+  Tell me when an invoice is paid.
 
 Inspector sends the standard A2A SendStreamingMessage request and renders
 the task updates. If the task stream disconnects, click Resume task stream
@@ -135,12 +137,12 @@ until docker exec "$CONTAINER_NAME" psql -U sentinel -d sentinel -tAc \
 done
 
 cat <<EOF
-The seeded invoice starts unpaid. In another terminal, run:
+The seeded invoice starts unpaid, so it is not in the result set. In another terminal, run:
 
 docker exec $CONTAINER_NAME psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \\
   -c "UPDATE invoices SET paid = true WHERE invoice_id = 'invoice-demo-001'"
 
-That SQL update drives a PostgreSQL CDC event and an A2A data artifact.
+That SQL update marks the invoice paid and adds it to the result set.
 
 EOF
 wait "$host_pid"

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Drasi;
@@ -92,7 +93,7 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
     {
         if (_engine is not null) return;
         var engine = await Engine.CreateAsync(topology.EngineId, cancellationToken: cancellationToken);
-        await engine.InstallFromLockfileAsync(topology.PluginLockDirectory, cancellationToken: cancellationToken);
+        await InstallPluginsAsync(engine, topology.PluginLockDirectory, cancellationToken);
         await engine.StartAsync(cancellationToken);
         foreach (var source in topology.Sources)
             await engine.AddSourceAsync(source.Kind, source.Id, source.Configuration, bootstrap: source.Bootstrap, cancellationToken: cancellationToken);
@@ -126,6 +127,49 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
     {
         if (_engine is not null) await _engine.DisposeAsync();
         _engine = null;
+    }
+
+    private static async Task InstallPluginsAsync(Engine engine, string directory, CancellationToken cancellationToken)
+    {
+        if (LocalPluginsMatchLock(directory, out var verify))
+        {
+            await engine.LoadPluginsAsync(directory, verify, cancellationToken);
+            return;
+        }
+
+        await engine.InstallFromLockfileAsync(directory, cancellationToken: cancellationToken);
+    }
+
+    private static bool LocalPluginsMatchLock(string directory, out Dictionary<string, string> verify)
+    {
+        verify = [];
+        IReadOnlyList<LockedPlugin> locked;
+        try
+        {
+            locked = Engine.ReadLockfile(directory);
+        }
+        catch (DrasiException)
+        {
+            return false;
+        }
+
+        if (locked.Count == 0)
+            return false;
+
+        foreach (var entry in locked)
+        {
+            if (string.IsNullOrEmpty(entry.Filename) || string.IsNullOrEmpty(entry.FileHash))
+                return false;
+            var path = Path.Combine(directory, entry.Filename);
+            if (!File.Exists(path))
+                return false;
+            var actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+            if (!actual.Equals(entry.FileHash, StringComparison.OrdinalIgnoreCase))
+                return false;
+            verify[entry.Filename] = entry.FileHash;
+        }
+
+        return true;
     }
 
     private Engine RequireEngine() => _engine ?? throw new SentinelException("engine_unavailable", "The Drasi engine is not started.");

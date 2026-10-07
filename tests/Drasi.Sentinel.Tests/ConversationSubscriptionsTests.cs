@@ -109,6 +109,6 @@ public sealed class ConversationSubscriptionsTests
         null,
         null);
     private static SafeCatalog Catalog() => new(
-        new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }) },
+        new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }, []) },
         new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
 }

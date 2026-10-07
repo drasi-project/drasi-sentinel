@@ -187,7 +187,7 @@ public sealed class SubscriptionInvariantTests
         new JsonArray("group-1"),
         new JsonObject { ["source"] = "source-1" });
     private static SafeCatalog Catalog() => new(
-        new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }) },
+        new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }, []) },
         new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
 
     private sealed class FailingEngine : INativeEngine

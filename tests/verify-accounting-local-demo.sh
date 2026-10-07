@@ -71,9 +71,9 @@ for expected in \
 	'"data":{"type":"native_query_diff"' \
 	'"queryId":"invoice-paid"' \
 	'"reactionId":"notify-account-owner"' \
-	'assert_diff_type_count Update 3' \
+	'assert_diff_type_count Update 1' \
 	'assert_diff_type_count Delete 1' \
-	'assert_diff_type_count Add 1' \
+	'assert_diff_type_count Add 2' \
 	'UPDATE invoices SET paid = false' \
 	'DELETE FROM invoices' \
 	'INSERT INTO invoices'
@@ -112,6 +112,7 @@ for expected in \
 	'publicationName: drasi_accounting_publication' \
 	'keyColumns: [invoice_id]' \
 	'MATCH (invoice:invoices)' \
+	'WHERE invoice.paid = true' \
 	'invoice.paid AS paid'
 do
 	grep -F -- "$expected" "$EXAMPLE/sentinel.yaml" >/dev/null

@@ -79,7 +79,8 @@ IResult AgentCardResponse(HttpRequest request) =>
         AgentCard.Create(
             manifest.Profile,
             manifest.A2aAuthentication,
-            new Uri($"{request.Scheme}://{request.Host}/")));
+            new Uri($"{request.Scheme}://{request.Host}/"),
+            manifest.SafeCatalog));
 app.MapGet("/.well-known/agent-card.json", AgentCardResponse);
 app.MapGet("/a2a/.well-known/agent-card.json", AgentCardResponse);
 var a2a = app.MapPost("/a2a/", A2aEndpoint.SendAsync);

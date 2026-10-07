@@ -107,7 +107,8 @@ public static class SentinelManifestLoader
                 query => new QueryCatalogItem(
                     query.Key,
                     query.Value.Description,
-                    query.Value.AllowedReactions)),
+                    query.Value.AllowedReactions,
+                    query.Value.Examples)),
             reactions.ToDictionary(
                 reaction => reaction.Key,
                 reaction => new ReactionCatalogItem(reaction.Key)));
@@ -549,8 +550,20 @@ public static class SentinelManifestLoader
         foreach (var entry in ReadEntries(root, "queries"))
         {
             var id = new QueryId(entry.Id);
+            RequireOnlyKeys(
+                entry.Configuration,
+                $"queries.{entry.Id}",
+                "id",
+                "description",
+                "cypher",
+                "sources",
+                "source_ids",
+                "reactions",
+                "allowed_reactions",
+                "examples");
             var description = RequiredScalar(entry.Configuration, "description", $"queries.{entry.Id}");
             var cypher = RequiredScalar(entry.Configuration, "cypher", $"queries.{entry.Id}");
+            var examples = StringList(entry.Configuration, $"queries.{entry.Id}", "examples");
             var sourceIds = StringList(entry.Configuration, $"queries.{entry.Id}", "sources", "source_ids");
             var allowedReactions = StringList(entry.Configuration, $"queries.{entry.Id}", "reactions", "allowed_reactions")
                 .Select(value => new ReactionId(value))
@@ -572,7 +585,7 @@ public static class SentinelManifestLoader
                 }
             }
 
-            if (!queries.TryAdd(id, new QueryDefinition(description, cypher, sourceIds, allowedReactions)))
+            if (!queries.TryAdd(id, new QueryDefinition(description, cypher, sourceIds, allowedReactions, examples)))
             {
                 throw new ManifestLoadException($"Duplicate query id '{entry.Id}' is not allowed.");
             }
@@ -805,6 +818,7 @@ public static class SentinelManifestLoader
         string Description,
         string Cypher,
         IReadOnlyList<string> SourceIds,
-        IReadOnlySet<ReactionId> AllowedReactions);
+        IReadOnlySet<ReactionId> AllowedReactions,
+        IReadOnlyList<string> Examples);
     private sealed record ReactionDefinition;
 }

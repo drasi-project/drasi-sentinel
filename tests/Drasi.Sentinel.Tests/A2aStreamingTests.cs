@@ -31,7 +31,7 @@ public sealed class A2aStreamingTests
     [Fact]
     public void Agent_card_advertises_sse_streaming_json_rpc()
     {
-        using var card = JsonDocument.Parse(JsonSerializer.Serialize(AgentCard.Create(ServiceProfile.Demo, new A2aAnonymousManifest(), new Uri("http://localhost:5000/"))));
+        using var card = JsonDocument.Parse(JsonSerializer.Serialize(AgentCard.Create(ServiceProfile.Demo, new A2aAnonymousManifest(), new Uri("http://localhost:5000/"), EmptyCatalog())));
         Assert.True(card.RootElement.GetProperty("capabilities").GetProperty("streaming").GetBoolean());
         Assert.Equal("JSONRPC", card.RootElement.GetProperty("supportedInterfaces")[0].GetProperty("protocolBinding").GetString());
     }
@@ -39,9 +39,13 @@ public sealed class A2aStreamingTests
     [Fact]
     public void Agent_card_declares_a_single_standard_json_rpc_interface()
     {
-        using var card = JsonDocument.Parse(JsonSerializer.Serialize(AgentCard.Create(ServiceProfile.Demo, new A2aAnonymousManifest(), new Uri("http://localhost:5000/"))));
+        using var card = JsonDocument.Parse(JsonSerializer.Serialize(AgentCard.Create(ServiceProfile.Demo, new A2aAnonymousManifest(), new Uri("http://localhost:5000/"), EmptyCatalog())));
         Assert.Single(card.RootElement.GetProperty("supportedInterfaces").EnumerateArray());
     }
+
+    private static SafeCatalog EmptyCatalog() => new(
+        new Dictionary<QueryId, QueryCatalogItem>(),
+        new Dictionary<ReactionId, ReactionCatalogItem>());
 
     [Fact]
     public void Owner_derivation_remains_stable()

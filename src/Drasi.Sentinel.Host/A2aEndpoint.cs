@@ -13,15 +13,32 @@ namespace Drasi.Sentinel.Host;
 
 public interface IA2aAgentResponder
 {
-    Task<string> RespondAsync(Principal principal, TaskTurnId turn, string input, CancellationToken cancellationToken);
+    Task<string> RespondAsync(
+        Principal principal,
+        TaskTurnId turn,
+        string input,
+        IReadOnlyList<string> priorAssistantTexts,
+        CancellationToken cancellationToken);
 }
 
 public sealed class MafA2aAgentResponder(AgentManifest? manifest, SafeCatalog catalog, IMafInnerAgent agent) : IA2aAgentResponder
 {
-    public Task<string> RespondAsync(Principal principal, TaskTurnId turn, string input, CancellationToken cancellationToken)
+    public Task<string> RespondAsync(
+        Principal principal,
+        TaskTurnId turn,
+        string input,
+        IReadOnlyList<string> priorAssistantTexts,
+        CancellationToken cancellationToken)
     {
         if (manifest is null) throw new A2aAgentUnconfiguredException();
-        return agent.RunAsync(new(manifest.Url, manifest.Model), principal, turn, AgentCapabilityProjection.Create(catalog), input, cancellationToken);
+        return agent.RunAsync(
+            new(manifest.Url, manifest.Model),
+            principal,
+            turn,
+            AgentCapabilityProjection.Create(catalog),
+            priorAssistantTexts,
+            input,
+            cancellationToken);
     }
 }
 
@@ -76,7 +93,10 @@ public static class A2aEndpoint
             {
                 var turn = new TaskTurnId(taskId.Value, request.Message.MessageId);
                 await repository.GetOrCreateTaskAsync(principal, taskId, context.RequestAborted);
-                var response = await responder.RespondAsync(principal, turn, request.Message.Text, context.RequestAborted);
+                var priorAssistantTexts = await ConversationTurnHistory.LoadAssistantTextsAsync(
+                    repository, principal.Owner, taskId, context.RequestAborted);
+                var response = await responder.RespondAsync(
+                    principal, turn, request.Message.Text, priorAssistantTexts, context.RequestAborted);
                 await repository.AppendAssistantArtifactAsync(principal, taskId, response, context.RequestAborted);
                 notifier.Notify(taskId);
                 return Results.Json(OneShot(request, taskId, response));
@@ -138,17 +158,23 @@ public static class A2aEndpoint
     {
         try
         {
-        var response = await responder.RespondAsync(
-            principal,
-            turn,
-            input,
-            CancellationToken.None);
-        await repository.AppendAssistantArtifactAsync(
-            principal,
-            taskId,
-            response,
-            CancellationToken.None);
-        notifier.Notify(taskId);
+            var priorAssistantTexts = await ConversationTurnHistory.LoadAssistantTextsAsync(
+                repository,
+                principal.Owner,
+                taskId,
+                CancellationToken.None);
+            var response = await responder.RespondAsync(
+                principal,
+                turn,
+                input,
+                priorAssistantTexts,
+                CancellationToken.None);
+            await repository.AppendAssistantArtifactAsync(
+                principal,
+                taskId,
+                response,
+                CancellationToken.None);
+            notifier.Notify(taskId);
         }
         catch (Exception exception) when (
             exception is A2aAgentUnconfiguredException or
@@ -156,17 +182,17 @@ public static class A2aEndpoint
             ClientResultException or
             SentinelException)
         {
-        await repository.AppendEventAsync(
-            principal.Owner,
-            new ConversationEvent(
-                taskId,
-                default,
-                ConversationEventKind.TaskFailed,
-                null,
-                "The task could not be completed.",
-                DateTimeOffset.UtcNow),
-            CancellationToken.None);
-        notifier.Notify(taskId);
+            await repository.AppendEventAsync(
+                principal.Owner,
+                new ConversationEvent(
+                    taskId,
+                    default,
+                    ConversationEventKind.TaskFailed,
+                    null,
+                    "The task could not be completed.",
+                    DateTimeOffset.UtcNow),
+                CancellationToken.None);
+            notifier.Notify(taskId);
         }
     }
 
