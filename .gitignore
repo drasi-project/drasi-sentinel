@@ -3,3 +3,4 @@ obj/
 .env
 .env.*
 !.env.example
+temp.json
