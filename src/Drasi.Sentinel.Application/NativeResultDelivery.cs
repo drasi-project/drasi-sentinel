@@ -1,3 +1,4 @@
+using System.Threading.Channels;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Drasi.Sentinel.Domain;
@@ -6,7 +7,9 @@ namespace Drasi.Sentinel.Application;
 
 public interface INativeResultIngestion
 {
+    void Enqueue(NativeSubscriptionId subscriptionId, NativeQueryDiff diff);
     Task IngestAsync(NativeSubscriptionId subscriptionId, NativeQueryDiff diff, CancellationToken cancellationToken);
+    Task RunAsync(CancellationToken cancellationToken);
 }
 
 public sealed class NativeResultIngestion(
@@ -18,11 +21,36 @@ public sealed class NativeResultIngestion(
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
+    private readonly Channel<NativeDelivery> _deliveries = Channel.CreateUnbounded<NativeDelivery>(
+        new UnboundedChannelOptions { SingleReader = true });
+
+    public void Enqueue(NativeSubscriptionId subscriptionId, NativeQueryDiff diff) =>
+        _deliveries.Writer.TryWrite(new NativeDelivery(subscriptionId, diff));
+
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await foreach (var delivery in _deliveries.Reader.ReadAllAsync(cancellationToken))
+            {
+                try
+                {
+                    await IngestAsync(delivery.SubscriptionId, delivery.Diff, CancellationToken.None);
+                }
+                catch (Exception)
+                {
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
 
     public async Task IngestAsync(NativeSubscriptionId subscriptionId, NativeQueryDiff diff, CancellationToken cancellationToken)
     {
         var subscription = await repository.GetSubscriptionByNativeIdAsync(subscriptionId, cancellationToken);
-        if (subscription is null || subscription.State != SubscriptionState.Active)
+        if (subscription is null || subscription.State is not (SubscriptionState.Arming or SubscriptionState.Active))
             return;
 
         var occurredAt = timeProvider.GetUtcNow();
@@ -51,4 +79,6 @@ public sealed class NativeResultIngestion(
             cancellationToken);
         notifier.Notify(persisted.TaskId);
     }
+
+    private sealed record NativeDelivery(NativeSubscriptionId SubscriptionId, NativeQueryDiff Diff);
 }

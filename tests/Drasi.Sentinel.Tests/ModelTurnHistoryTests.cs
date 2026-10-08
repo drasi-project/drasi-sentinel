@@ -213,6 +213,18 @@ public sealed class ModelTurnHistoryTests
     }
 
     [Fact]
+    public async Task Missing_tool_argument_returns_a_tool_result()
+    {
+        var tools = Tools(UnusedSubscriptions(), Principal(), "message-1");
+
+        var rejected = await InvokeAsync(tools, "subscribe_to_changes");
+
+        Assert.Contains("invalid_tool_arguments", rejected);
+        Assert.Contains(AgentTurn.ToolRejectedKind, rejected);
+        Assert.Contains("Pass the required tool argument", rejected);
+    }
+
+    [Fact]
     public async Task Tool_call_observes_the_turn_token()
     {
         using var source = new CancellationTokenSource();

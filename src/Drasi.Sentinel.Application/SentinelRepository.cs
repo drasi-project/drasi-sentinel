@@ -20,16 +20,70 @@ public interface IConversationRepository
 
 public interface ITaskEventNotifier
 {
+    long Observe(ConversationTaskId taskId);
     void Notify(ConversationTaskId taskId);
-    Task WaitAsync(ConversationTaskId taskId, CancellationToken cancellationToken);
+    Task WaitAsync(ConversationTaskId taskId, long observedGeneration, CancellationToken cancellationToken);
 }
 
 public sealed class TaskEventNotifier : ITaskEventNotifier
 {
-    private readonly ConcurrentDictionary<ConversationTaskId, SemaphoreSlim> _signals = new();
-    public void Notify(ConversationTaskId taskId) => _signals.GetOrAdd(taskId, static _ => new(0)).Release();
-    public Task WaitAsync(ConversationTaskId taskId, CancellationToken cancellationToken) =>
-        _signals.GetOrAdd(taskId, static _ => new(0)).WaitAsync(cancellationToken);
+    private readonly ConcurrentDictionary<ConversationTaskId, Slot> _slots = new();
+
+    public long Observe(ConversationTaskId taskId)
+    {
+        var slot = SlotFor(taskId);
+        return Volatile.Read(ref slot.Generation);
+    }
+
+    public void Notify(ConversationTaskId taskId)
+    {
+        var slot = SlotFor(taskId);
+        List<TaskCompletionSource> waiters;
+        lock (slot)
+        {
+            slot.Generation++;
+            waiters = slot.Waiters;
+            slot.Waiters = [];
+        }
+
+        foreach (var waiter in waiters)
+            waiter.TrySetResult();
+    }
+
+    public async Task WaitAsync(ConversationTaskId taskId, long observedGeneration, CancellationToken cancellationToken)
+    {
+        var slot = SlotFor(taskId);
+        while (Volatile.Read(ref slot.Generation) == observedGeneration)
+        {
+            var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (slot)
+            {
+                if (slot.Generation != observedGeneration)
+                    return;
+                slot.Waiters.Add(waiter);
+            }
+
+            using var registration = cancellationToken.Register(() => waiter.TrySetCanceled(cancellationToken));
+            try
+            {
+                await waiter.Task;
+            }
+            catch (OperationCanceledException)
+            {
+                lock (slot)
+                    slot.Waiters.Remove(waiter);
+                throw;
+            }
+        }
+    }
+
+    private Slot SlotFor(ConversationTaskId taskId) => _slots.GetOrAdd(taskId, static _ => new Slot());
+
+    private sealed class Slot
+    {
+        public long Generation;
+        public List<TaskCompletionSource> Waiters { get; set; } = [];
+    }
 }
 
 public sealed class InMemorySentinelRepository : IConversationRepository
@@ -51,10 +105,12 @@ public sealed class InMemorySentinelRepository : IConversationRepository
         await Gate(subscription.TaskId).WaitAsync(cancellationToken);
         try
         {
-            var key = (subscription.Owner, subscription.TaskId, subscription.Request.RequestKey);
-            if (_requests.TryGetValue(key, out var existing)) return _subscriptions[existing];
+            var existing = _subscriptions.Values.FirstOrDefault(item =>
+                item.Owner == subscription.Owner && item.TaskId == subscription.TaskId);
+            if (existing is not null)
+                return existing;
             _subscriptions[subscription.Id] = subscription;
-            _requests[key] = subscription.Id;
+            _requests[(subscription.Owner, subscription.TaskId, subscription.Request.RequestKey)] = subscription.Id;
             return subscription;
         }
         finally { Gate(subscription.TaskId).Release(); }
@@ -170,10 +226,10 @@ public sealed class PostgresSentinelRepository : IConversationRepository, IAsync
         await using (var command = new NpgsqlCommand("""
             INSERT INTO sentinel_subscriptions (subscription_id,owner_id,task_id,tenant_id,query_id,reaction_id,request_key,state,native_subscription_id,created_at)
             VALUES (@id,@owner,@task,@tenant,@query,@reaction,@request,@state,@native,@created)
-            ON CONFLICT (owner_id, task_id, request_key) DO NOTHING;
+            ON CONFLICT (owner_id, task_id) DO NOTHING;
             """, connection))
         { AddSubscription(command, item); await command.ExecuteNonQueryAsync(cancellationToken); }
-        return await RequireSubscription(connection, item.Owner, item.TaskId, item.Request.RequestKey, cancellationToken);
+        return await RequireTaskSubscription(connection, item.Owner, item.TaskId, cancellationToken);
     }
     public async Task<ConversationSubscription?> GetSubscriptionAsync(OwnerId owner, ConversationTaskId taskId, SubscriptionId id, CancellationToken cancellationToken)
     {
@@ -254,7 +310,7 @@ public sealed class PostgresSentinelRepository : IConversationRepository, IAsync
     private const string SubscriptionSelect = "SELECT subscription_id,task_id,tenant_id,owner_id,query_id,reaction_id,request_key,state,native_subscription_id,created_at FROM sentinel_subscriptions";
     private static NpgsqlCommand SubscriptionCommand(NpgsqlConnection c, string where, OwnerId owner, ConversationTaskId task) { var x = new NpgsqlCommand(SubscriptionSelect + " WHERE " + where + " ORDER BY created_at", c); x.Parameters.AddWithValue("owner", owner.Value); x.Parameters.AddWithValue("task", task.Value); return x; }
     private static async Task<ConversationSubscription?> ReadSubscription(NpgsqlConnection c, string where, OwnerId owner, ConversationTaskId task, SubscriptionId id, CancellationToken ct) { await using var x = new NpgsqlCommand(SubscriptionSelect + " WHERE " + where, c); x.Parameters.AddWithValue("owner", owner.Value); x.Parameters.AddWithValue("task", task.Value); x.Parameters.AddWithValue("id", id.Value); await using var r = await x.ExecuteReaderAsync(ct); return await r.ReadAsync(ct) ? ReadSubscription(r) : null; }
-    private static async Task<ConversationSubscription> RequireSubscription(NpgsqlConnection c, OwnerId owner, ConversationTaskId task, SubscriptionRequestKey key, CancellationToken ct) { await using var x = SubscriptionCommand(c, "owner_id=@owner AND task_id=@task AND request_key=@request", owner, task); x.Parameters.AddWithValue("request", key.Value); await using var r = await x.ExecuteReaderAsync(ct); if (!await r.ReadAsync(ct)) throw new InvalidOperationException("Subscription was not persisted."); return ReadSubscription(r); }
+    private static async Task<ConversationSubscription> RequireTaskSubscription(NpgsqlConnection c, OwnerId owner, ConversationTaskId task, CancellationToken ct) { await using var x = SubscriptionCommand(c, "owner_id=@owner AND task_id=@task", owner, task); await using var r = await x.ExecuteReaderAsync(ct); if (!await r.ReadAsync(ct)) throw new InvalidOperationException("Subscription was not persisted."); return ReadSubscription(r); }
     private static ConversationSubscription ReadSubscription(NpgsqlDataReader r) => new(new(r.GetGuid(0)), new(r.GetString(1)), new(r.GetString(2)), new(r.GetString(3)), new(new(r.GetString(4)), new(r.GetString(5)), new(r.GetString(6))), Enum.Parse<SubscriptionState>(r.GetString(7)), new(r.GetString(8)), r.GetFieldValue<DateTimeOffset>(9));
     private static void AddSubscription(NpgsqlCommand x, ConversationSubscription s) { x.Parameters.AddWithValue("id", s.Id.Value); x.Parameters.AddWithValue("owner", s.Owner.Value); x.Parameters.AddWithValue("task", s.TaskId.Value); x.Parameters.AddWithValue("tenant", s.Tenant.Value); x.Parameters.AddWithValue("query", s.Request.QueryId.Value); x.Parameters.AddWithValue("reaction", s.Request.ReactionId.Value); x.Parameters.AddWithValue("request", s.Request.RequestKey.Value); x.Parameters.AddWithValue("state", s.State.ToString()); x.Parameters.AddWithValue("native", s.NativeSubscriptionId.Value); x.Parameters.AddWithValue("created", s.CreatedAt); }
 }

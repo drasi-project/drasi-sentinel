@@ -177,7 +177,7 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
     {
         if (resultIngestion is null) return;
         foreach (var diff in result.Results)
-            resultIngestion.IngestAsync(
+            resultIngestion.Enqueue(
                 id,
                 new NativeQueryDiff(
                     diff.Type.ToString(),
@@ -187,8 +187,7 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
                     diff.GroupingKeys is null
                         ? null
                         : new JsonArray(diff.GroupingKeys.Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
-                    result.Metadata),
-                CancellationToken.None).GetAwaiter().GetResult();
+                    result.Metadata));
     }
 }
 
@@ -200,6 +199,7 @@ public sealed class ConversationSubscriptions(
     TimeProvider timeProvider) : IConversationSubscriptions
 {
     private static readonly JsonSerializerOptions ArtifactJsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _activation = new();
 
     public async Task<ToolResult> InvokeAsync(Principal principal, TaskTurnId turn, GovernedToolCall call, CancellationToken cancellationToken) =>
         call switch
@@ -223,41 +223,51 @@ public sealed class ConversationSubscriptions(
 
     private async Task<ToolResult> SubscribeAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, CancellationToken cancellationToken)
     {
+        var gate = _activation.GetOrAdd($"{principal.Owner.Value}\n{turn.TaskId}", static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await SubscribeClaimedAsync(principal, turn, request, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<ToolResult> SubscribeClaimedAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, CancellationToken cancellationToken)
+    {
         var taskId = new ConversationTaskId(turn.TaskId);
         await repository.GetOrCreateTaskAsync(principal, taskId, cancellationToken);
-        var existing = await repository.ListSubscriptionsAsync(principal.Owner, taskId, cancellationToken);
-        if (existing.Count > 0)
-        {
-            var existingSubscription = existing.Single();
-            if (existingSubscription.Request.RequestKey == request.RequestKey)
-                return new("subscription_created", existingSubscription);
-            throw new SentinelException(
-                "task_already_has_subscription",
-                "An A2A task can own only one active change subscription.");
-        }
         var id = new SubscriptionId(Guid.NewGuid());
         var candidate = new ConversationSubscription(
             id, taskId, principal.Tenant, principal.Owner, request, SubscriptionState.Arming,
             new NativeSubscriptionId($"reaction-{id.Value:N}"), timeProvider.GetUtcNow());
         var subscription = await repository.GetOrCreateSubscriptionAsync(candidate, cancellationToken);
-        if (subscription.State == SubscriptionState.Arming)
+        subscription = await repository.GetSubscriptionAsync(principal.Owner, taskId, subscription.Id, cancellationToken) ?? subscription;
+        if (subscription.State == SubscriptionState.Cancelled)
+            return new("watch_ended", subscription, Message: "The watch on this task has ended.");
+        if (subscription.State is not (SubscriptionState.Arming or SubscriptionState.Degraded))
         {
-            try
-            {
-                await engine.AttachAsync(subscription, cancellationToken);
-                subscription = subscription with { State = SubscriptionState.Active };
-                await repository.SaveSubscriptionAsync(subscription, cancellationToken);
-                await AppendAsync(principal.Owner, taskId, ConversationEventKind.SubscriptionCreated, subscription.Id,
-                    $"Subscription {subscription.Id.Value} is active.", cancellationToken);
-            }
-            catch
-            {
-                subscription = subscription with { State = SubscriptionState.Degraded };
-                await repository.SaveSubscriptionAsync(subscription, CancellationToken.None);
-                await AppendAsync(principal.Owner, taskId, ConversationEventKind.TaskFailed, subscription.Id,
-                    $"Subscription {subscription.Id.Value} could not be activated.", CancellationToken.None);
-                throw;
-            }
+            if (subscription.Request.RequestKey != request.RequestKey)
+                throw new SentinelException(
+                    "task_already_has_subscription",
+                    "An A2A task can own only one active change subscription.");
+            return new("subscription_created", subscription);
+        }
+        try
+        {
+            await engine.AttachAsync(subscription, cancellationToken);
+            subscription = subscription with { State = SubscriptionState.Active };
+            await repository.SaveSubscriptionAsync(subscription, cancellationToken);
+            await AppendAsync(principal.Owner, taskId, ConversationEventKind.SubscriptionCreated, subscription.Id,
+                $"Subscription {subscription.Id.Value} is active.", cancellationToken);
+        }
+        catch
+        {
+            subscription = subscription with { State = SubscriptionState.Degraded };
+            await repository.SaveSubscriptionAsync(subscription, CancellationToken.None);
+            throw;
         }
         return new("subscription_created", subscription);
     }

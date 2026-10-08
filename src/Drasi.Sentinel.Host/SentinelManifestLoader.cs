@@ -115,7 +115,12 @@ public static class SentinelManifestLoader
 
         var unbound = CatalogBinding.From(catalog).OfType<UnboundQuery>().FirstOrDefault();
         if (unbound is not null)
-            throw new ManifestLoadException($"Query '{unbound.Query.Value}' must allow exactly one reaction.");
+            throw new ManifestLoadException(unbound.Reason switch
+            {
+                UnboundQueryReason.UnknownReaction =>
+                    $"Query '{unbound.Query.Value}' allows unknown reaction '{unbound.Missing?.Value}'.",
+                _ => $"Query '{unbound.Query.Value}' must allow exactly one reaction.",
+            });
 
         return new SentinelManifest(
             agent,

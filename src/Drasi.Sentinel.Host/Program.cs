@@ -17,10 +17,12 @@ builder.Services.AddSingleton<PostgresSentinelRepository>(_ =>
 builder.Services.AddSingleton<IConversationRepository>(services =>
     services.GetRequiredService<PostgresSentinelRepository>());
 builder.Services.AddSingleton<ITaskEventNotifier, TaskEventNotifier>();
-builder.Services.AddSingleton<INativeResultIngestion>(services => new NativeResultIngestion(
+builder.Services.AddSingleton(services => new NativeResultIngestion(
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
     TimeProvider.System));
+builder.Services.AddSingleton<INativeResultIngestion>(services =>
+    services.GetRequiredService<NativeResultIngestion>());
 builder.Services.AddSingleton(manifest.A2aAuthentication);
 if (manifest.A2aAuthentication is A2aJwtManifest jwt)
 {
@@ -78,6 +80,8 @@ if (manifest.A2aAuthentication is A2aJwtManifest)
 }
 await app.Services.GetRequiredService<PostgresSentinelRepository>()
     .InitializeAsync(app.Lifetime.ApplicationStopping);
+_ = app.Services.GetRequiredService<NativeResultIngestion>()
+    .RunAsync(app.Lifetime.ApplicationStopping);
 await engine.StartAsync(app.Lifetime.ApplicationStopping);
 app.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(
     () => engine.DisposeAsync().AsTask().GetAwaiter().GetResult());

@@ -134,9 +134,49 @@ public sealed class A2aProtocolInvariantTests
         Assert.Contains("id: 2", body);
     }
 
+    [Fact]
+    public async Task Sse_replay_continues_past_a_terminal_event_that_is_not_latest()
+    {
+        var principal = new Principal(new("tenant"), new("owner"));
+        var taskId = new ConversationTaskId("task");
+        var reads = 0;
+        var reader = new PageReader(() =>
+        {
+            reads++;
+            return reads switch
+            {
+                1 => [Event(1, ConversationEventKind.TaskFailed, "The model failed.")],
+                2 => [Event(2, ConversationEventKind.Observation, ObservationJson())],
+                _ => [Event(2, ConversationEventKind.Observation, ObservationJson()), Event(3, ConversationEventKind.TaskCompleted, "Done.")],
+            };
+        });
+        using var requestIdDocument = JsonDocument.Parse("1");
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+
+        await new SseTaskResult(requestIdDocument.RootElement.Clone(), principal, taskId, reader, new TaskEventNotifier(), 0).ExecuteAsync(context);
+
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+        Assert.Contains("id: 1", body);
+        Assert.Contains("The model failed.", body);
+        Assert.Contains("id: 2", body);
+        Assert.Contains("native_query_diff", body);
+        Assert.Contains("id: 3", body);
+    }
+
     private static string ObservationJson() => """
         {"type":"native_query_diff","subscriptionId":"00000000-0000-0000-0000-000000000001","queryId":"query","reactionId":"reaction","occurredAt":"2026-10-06T00:00:00+00:00","diffType":"Add","data":{"entity_id":"entity-200"},"metadata":{"source":"test"}}
         """;
+
+    private static ConversationEvent Event(long sequence, ConversationEventKind kind, string content) =>
+        new(new("task"), new(sequence), kind, null, content, DateTimeOffset.UtcNow);
+
+    private sealed class PageReader(Func<IReadOnlyList<ConversationEvent>> read) : IConversationSubscriptions
+    {
+        public Task<ToolResult> InvokeAsync(Principal principal, TaskTurnId turn, GovernedToolCall call, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<ConversationEvent>> ReadEventsAsync(Principal principal, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken) =>
+            Task.FromResult(read().Where(item => item.Sequence.Value > after.Value).Take(limit).ToArray() as IReadOnlyList<ConversationEvent>);
+    }
 
     private sealed class Reader(IConversationRepository repository) : IConversationSubscriptions
     {

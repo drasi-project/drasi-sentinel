@@ -32,6 +32,10 @@ public static class AgentTurn
             "Call subscribe_to_changes for one catalog query, then call get_current_task_results in this same turn, and report the rows.",
         "task_already_has_subscription" or "invalid_subscription_id" =>
             "Do not call subscribe_to_changes again. Call get_current_task_results.",
+        "invalid_tool_arguments" =>
+            "Pass the required tool argument and continue in this turn.",
+        "watch_ended" =>
+            "The watch on this task has ended. Do not subscribe again and do not fetch current rows as a live watch.",
         _ => "Follow the instructions and continue in this turn.",
     };
 
@@ -55,6 +59,7 @@ public static class AgentTurn
         "If this task already has a subscription, call get_current_task_results only. Do not call subscribe_to_changes again. " +
         "A short affirmative reply to an earlier assistant offer to check current results is a current-results request. Call get_current_task_results. Do not answer with only a greeting or ask how you can help. " +
         "If a tool result has Kind tool_rejected, read Code and follow Next in this turn. That is not a failed task. " +
+        "If a tool result has Kind watch_ended, the watch on this task has ended. Do not subscribe again and do not call get_current_task_results. " +
         "The host binds the reaction. Do not pass a reaction id. Never invent subscription ids, query ids, or states. ";
 
     private sealed record PromptQuery(string Id, string Description, IReadOnlyList<string> Examples);

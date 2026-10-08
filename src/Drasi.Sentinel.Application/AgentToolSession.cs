@@ -58,11 +58,15 @@ public sealed class AgentToolSession : IAgentTools
         _cancellationToken.ThrowIfCancellationRequested();
         return name switch
         {
-            AgentTurn.SubscribeTool => SubscribeAsync(Required(arguments, "query")),
+            AgentTurn.SubscribeTool => Argument(arguments, "query") is { } query
+                ? SubscribeAsync(query)
+                : Task.FromResult(Rejected("invalid_tool_arguments", "Pass the query id.")),
             AgentTurn.ListTool => InvokeAsync(new ListTaskSubscriptions()),
             AgentTurn.CurrentResultsTool => InvokeAsync(new GetCurrentTaskResults()),
-            AgentTurn.CancelTool => CancelAsync(Required(arguments, "id")),
-            _ => throw new InvalidOperationException($"Unknown agent tool '{name}'."),
+            AgentTurn.CancelTool => Argument(arguments, "id") is { } id
+                ? CancelAsync(id)
+                : Task.FromResult(Rejected("invalid_tool_arguments", "Pass the subscription id.")),
+            _ => Task.FromResult(Rejected("invalid_tool_arguments", "The tool name is not valid.")),
         };
     }
 
@@ -89,17 +93,19 @@ public sealed class AgentToolSession : IAgentTools
         }
     }
 
-    private static string Required(IReadOnlyDictionary<string, string?>? arguments, string name) =>
-        arguments is not null && arguments.TryGetValue(name, out var value) && value is not null
+    private static string? Argument(IReadOnlyDictionary<string, string?>? arguments, string name) =>
+        arguments is not null && arguments.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value
-            : throw new InvalidOperationException($"Agent tool argument '{name}' is required.");
+            : null;
 
     private static bool IsRecoverable(SentinelException exception) =>
         exception.Code is "subscription_not_found"
             or "task_already_has_subscription"
             or "query_unknown"
             or "query_ambiguous"
-            or "reaction_unbound";
+            or "reaction_unbound"
+            or "reaction_unknown"
+            or "watch_ended";
 
     private static string Success(ToolResult result) => JsonSerializer.Serialize(new
     {

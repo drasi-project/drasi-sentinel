@@ -80,6 +80,22 @@ public sealed class SubscriptionInvariantTests
     }
 
     [Fact]
+    public void Subscription_rejects_an_unknown_reaction_id()
+    {
+        var catalog = new SafeCatalog(
+            new Dictionary<QueryId, QueryCatalogItem>
+            {
+                [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("missing"), new("reaction") }, []),
+            },
+            new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
+
+        var exception = Assert.Throws<SentinelException>(() => CatalogBinding.Require(catalog, new("query")));
+
+        Assert.Equal("reaction_unknown", exception.Code);
+        Assert.Contains("missing", exception.Message);
+    }
+
+    [Fact]
     public async Task Failed_attachment_is_persisted_as_degraded()
     {
         var repository = new InMemorySentinelRepository();
@@ -88,6 +104,73 @@ public sealed class SubscriptionInvariantTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => Subscribe(service, principal, "task", "message", "request"));
         var subscription = Assert.Single(await repository.ListSubscriptionsAsync(principal.Owner, new("task"), CancellationToken.None));
         Assert.Equal(SubscriptionState.Degraded, subscription.State);
+        var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 20, CancellationToken.None);
+        Assert.DoesNotContain(events, item => item.Kind == ConversationEventKind.TaskFailed);
+    }
+
+    [Fact]
+    public async Task Failed_attachment_can_be_retried_on_the_same_task()
+    {
+        var repository = new InMemorySentinelRepository();
+        var engine = new ToggleEngine();
+        var service = new ConversationSubscriptions(Catalog(), engine, repository, new TaskEventNotifier(), TimeProvider.System);
+        var principal = Principal();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Subscribe(service, principal, "task", "message-1", "first"));
+        engine.Fail = false;
+
+        var subscription = await Subscribe(service, principal, "task", "message-2", "second");
+
+        Assert.Equal(SubscriptionState.Active, subscription.State);
+        Assert.Equal("first", subscription.Request.RequestKey.Value);
+    }
+
+    [Fact]
+    public async Task Subscribe_after_cancel_reports_that_the_watch_ended()
+    {
+        var (service, _, principal) = await CreateAsync();
+        var subscription = await Subscribe(service, principal, "task", "message-1", "request");
+        await service.InvokeAsync(principal, new("task", "message-2"), new CancelTaskSubscription(subscription.Id), CancellationToken.None);
+
+        var ended = await service.InvokeAsync(principal, new("task", "message-3"), new SubscribeToQuery(new("query"), new("again")), CancellationToken.None);
+
+        Assert.Equal("watch_ended", ended.Kind);
+        Assert.Equal(subscription.Id, ended.Subscription!.Id);
+        Assert.Equal(SubscriptionState.Cancelled, ended.Subscription.State);
+    }
+
+    [Fact]
+    public async Task Arming_subscription_accepts_a_native_diff()
+    {
+        var repository = new InMemorySentinelRepository();
+        var principal = Principal();
+        await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
+        var subscription = await repository.GetOrCreateSubscriptionAsync(
+            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Arming, new("reaction-arming"), DateTimeOffset.UtcNow),
+            CancellationToken.None);
+        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
+
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("Add", "entity-200", "one"), CancellationToken.None);
+
+        var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None);
+        Assert.Single(events, item => item.Kind == ConversationEventKind.Observation);
+    }
+
+    [Fact]
+    public async Task Queued_native_diff_is_written_by_the_delivery_loop()
+    {
+        var (service, repository, principal) = await CreateAsync();
+        var subscription = await Subscribe(service, principal, "task", "message", "request");
+        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
+        using var cancellation = new CancellationTokenSource();
+        var running = ingestion.RunAsync(cancellation.Token);
+
+        ingestion.Enqueue(subscription.NativeSubscriptionId, Diff("Add", "entity-200", "queued"));
+        for (var attempt = 0; attempt < 50 && !HasObservation(repository, principal); attempt++)
+            await Task.Delay(20);
+        cancellation.Cancel();
+        await running;
+
+        Assert.True(HasObservation(repository, principal));
     }
 
     [Fact]
@@ -182,6 +265,11 @@ public sealed class SubscriptionInvariantTests
         return (new(Catalog(), engine, repository, new TaskEventNotifier(), TimeProvider.System), repository, Principal());
     }
 
+    private static bool HasObservation(InMemorySentinelRepository repository, Principal principal) =>
+        repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 20, CancellationToken.None)
+            .GetAwaiter().GetResult()
+            .Any(item => item.Kind == ConversationEventKind.Observation);
+
     private static async Task<ConversationSubscription> Subscribe(IConversationSubscriptions service, Principal principal, string task, string message, string key) =>
         (await service.InvokeAsync(principal, new(task, message), new SubscribeToQuery(new("query"), new(key)), CancellationToken.None)).Subscription!;
     private static Principal Principal(string owner = "owner") => new(new("tenant"), new(owner));
@@ -205,6 +293,18 @@ public sealed class SubscriptionInvariantTests
     private static SafeCatalog Catalog() => new(
         new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }, []) },
         new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
+
+    private sealed class ToggleEngine : INativeEngine
+    {
+        public bool Fail { get; set; } = true;
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task AttachAsync(ConversationSubscription subscription, CancellationToken cancellationToken) =>
+            Fail ? Task.FromException(new InvalidOperationException("native unavailable")) : Task.CompletedTask;
+        public Task DetachAsync(NativeSubscriptionId subscriptionId, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<IReadOnlyList<JsonNode>> GetQueryResultsAsync(QueryId queryId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<JsonNode>>([]);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class FailingEngine : INativeEngine
     {

@@ -68,6 +68,21 @@ public sealed class ConversationRepositoryTests
         var otherTask = await repository.GetOrCreateSubscriptionAsync(Subscription("owner", "other", "request"), CancellationToken.None);
         Assert.Equal(first.Id, replay.Id);
         Assert.NotEqual(first.Id, otherTask.Id);
+        var otherKey = await repository.GetOrCreateSubscriptionAsync(Subscription("owner", "task", "other-key"), CancellationToken.None);
+        Assert.Equal(first.Id, otherKey.Id);
+    }
+
+    [Fact]
+    public async Task Notifier_wakes_every_waiter()
+    {
+        var notifier = new TaskEventNotifier();
+        var taskId = new ConversationTaskId("task");
+        var observed = notifier.Observe(taskId);
+        var first = notifier.WaitAsync(taskId, observed, CancellationToken.None);
+        var second = notifier.WaitAsync(taskId, observed, CancellationToken.None);
+
+        notifier.Notify(taskId);
+        await Task.WhenAll(first, second);
     }
 
     [Fact]

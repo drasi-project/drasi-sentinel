@@ -157,29 +157,23 @@ public static class A2aEndpoint
                 CancellationToken.None);
             notifier.Notify(taskId);
         }
-        catch (Exception exception) when (
-            exception is A2aAgentUnconfiguredException or
-            AgentFailureException or
-            SentinelException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            await repository.AppendEventAsync(
-                principal.Owner,
-                new ConversationEvent(
-                    taskId,
-                    default,
-                    ConversationEventKind.TaskFailed,
-                    null,
-                    "The task could not be completed.",
-                    DateTimeOffset.UtcNow),
-                CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            var text = exception is A2aAgentUnconfiguredException or AgentFailureException or SentinelException
+                ? exception.Message
+                : "The task could not be completed.";
+            await repository.AppendAssistantArtifactAsync(principal, taskId, text, CancellationToken.None);
             notifier.Notify(taskId);
         }
     }
 
     private static object OneShot(A2aMessageRequest request, ConversationTaskId task, string response) =>
         request.UsesInspectorV1
-            ? new { jsonrpc = "2.0", id = request.RequestId, result = new { task = new { id = task.Value, contextId = task.Value, status = new { state = "TASK_STATE_COMPLETED" }, artifacts = new[] { new { parts = new[] { new { text = response } } } } } } }
-            : new { jsonrpc = "2.0", id = request.RequestId, result = new { id = task.Value, contextId = task.Value, kind = "task", status = new { state = "completed" }, artifacts = new[] { new { parts = new[] { new { kind = "text", text = response } } } } } };
+            ? new { jsonrpc = "2.0", id = request.RequestId, result = new { task = new { id = task.Value, contextId = task.Value, status = new { state = "TASK_STATE_WORKING" }, artifacts = new[] { new { parts = new[] { new { text = response } } } } } } }
+            : new { jsonrpc = "2.0", id = request.RequestId, result = new { id = task.Value, contextId = task.Value, kind = "task", status = new { state = "working" }, artifacts = new[] { new { parts = new[] { new { kind = "text", text = response } } } } } };
 
     private static IResult Error(JsonElement? id, int code, string message, string? sentinelCode = null, int? status = null) =>
         Results.Json(new { jsonrpc = "2.0", id, error = new { code, message, data = sentinelCode is null ? null : new { code = sentinelCode } } }, statusCode: status);
@@ -201,18 +195,27 @@ internal sealed class SseTaskResult(
         context.Response.Headers.CacheControl = "no-cache";
         context.Response.Headers.Connection = "keep-alive";
         var cursor = new TaskEventSequence(after);
+        var observed = notifier.Observe(taskId);
         while (!context.RequestAborted.IsCancellationRequested)
         {
             var events = await subscriptions.ReadEventsAsync(principal, taskId, cursor, 100, context.RequestAborted);
+            ConversationEvent? last = null;
             foreach (var item in events)
             {
                 await context.Response.WriteAsync($"id: {item.Sequence.Value}\ndata: {JsonSerializer.Serialize(Project(item))}\n\n", context.RequestAborted);
                 await context.Response.Body.FlushAsync(context.RequestAborted);
                 cursor = item.Sequence;
-                if (item.Kind is ConversationEventKind.TaskCompleted or ConversationEventKind.TaskFailed)
-                    return;
+                last = item;
             }
-            await notifier.WaitAsync(taskId, context.RequestAborted);
+            if (last?.Kind is ConversationEventKind.TaskCompleted or ConversationEventKind.TaskFailed)
+            {
+                var later = await subscriptions.ReadEventsAsync(principal, taskId, cursor, 1, context.RequestAborted);
+                if (later.Count == 0)
+                    return;
+                continue;
+            }
+            await notifier.WaitAsync(taskId, observed, context.RequestAborted);
+            observed = notifier.Observe(taskId);
         }
     }
 
@@ -253,6 +256,14 @@ internal sealed class SseTaskResult(
                 status = new
                 {
                     state = item.Kind == ConversationEventKind.TaskCompleted ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED",
+                    message = new
+                    {
+                        messageId = item.Sequence.Value.ToString(),
+                        role = "ROLE_AGENT",
+                        taskId = item.TaskId.Value,
+                        contextId = item.TaskId.Value,
+                        parts = new[] { new { kind = "text", text = item.Content, mediaType = "text/plain" } },
+                    },
                     timestamp = item.OccurredAt,
                 },
                 final = true,
@@ -308,6 +319,14 @@ internal sealed class SseTaskResult(
                     status = new
                     {
                         state = item.Kind == ConversationEventKind.TaskCompleted ? "TASK_STATE_COMPLETED" : "TASK_STATE_FAILED",
+                        message = new
+                        {
+                            messageId = item.Sequence.Value.ToString(),
+                            role = "ROLE_AGENT",
+                            taskId = item.TaskId.Value,
+                            contextId = item.TaskId.Value,
+                            parts = new[] { new { text = item.Content, mediaType = "text/plain" } },
+                        },
                         timestamp = item.OccurredAt,
                     },
                 },
