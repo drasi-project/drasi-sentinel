@@ -49,18 +49,34 @@ public sealed class SubscriptionInvariantTests
         Assert.Single(events, x => x.Kind == ConversationEventKind.TaskCompleted);
     }
 
-    [Theory]
-    [InlineData("unknown", "reaction")]
-    [InlineData("query", "unknown")]
-    public async Task Subscription_rejects_unapproved_catalog_assets(string query, string reaction)
+    [Fact]
+    public async Task Subscription_rejects_an_unknown_query()
     {
         var (service, _, principal) = await CreateAsync();
-        var request = new SubscriptionRequest(
-            new(query), new(reaction),
-            new("request"));
         var exception = await Assert.ThrowsAsync<SentinelException>(() =>
-            service.InvokeAsync(principal, new("task", "message"), new SubscribeToChanges(request), CancellationToken.None));
-        Assert.Equal("catalog_rejected", exception.Code);
+            service.InvokeAsync(principal, new("task", "message"), new SubscribeToQuery(new("unknown"), new("request")), CancellationToken.None));
+        Assert.Equal("query_unknown", exception.Code);
+    }
+
+    [Fact]
+    public async Task Subscription_rejects_a_query_with_many_reactions()
+    {
+        var engine = new FakeNativeEngine();
+        await engine.StartAsync(CancellationToken.None);
+        var catalog = new SafeCatalog(
+            new Dictionary<QueryId, QueryCatalogItem>
+            {
+                [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("one"), new("two") }, []),
+            },
+            new Dictionary<ReactionId, ReactionCatalogItem>
+            {
+                [new("one")] = new(new("one")),
+                [new("two")] = new(new("two")),
+            });
+        var service = new ConversationSubscriptions(catalog, engine, new InMemorySentinelRepository(), new TaskEventNotifier(), TimeProvider.System);
+        var exception = await Assert.ThrowsAsync<SentinelException>(() =>
+            service.InvokeAsync(Principal(), new("task", "message"), new SubscribeToQuery(new("query"), new("request")), CancellationToken.None));
+        Assert.Equal("query_ambiguous", exception.Code);
     }
 
     [Fact]
@@ -167,7 +183,7 @@ public sealed class SubscriptionInvariantTests
     }
 
     private static async Task<ConversationSubscription> Subscribe(IConversationSubscriptions service, Principal principal, string task, string message, string key) =>
-        (await service.InvokeAsync(principal, new(task, message), new SubscribeToChanges(new(new("query"), new("reaction"), new(key))), CancellationToken.None)).Subscription!;
+        (await service.InvokeAsync(principal, new(task, message), new SubscribeToQuery(new("query"), new(key)), CancellationToken.None)).Subscription!;
     private static Principal Principal(string owner = "owner") => new(new("tenant"), new(owner));
     private static string DiffType(ConversationEvent observation)
     {

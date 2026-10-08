@@ -1,9 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Azure.Identity;
-using System.ClientModel;
-using Drasi.Sentinel.Agent.Maf;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Drasi.Sentinel.Application;
 using Drasi.Sentinel.Domain;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -11,35 +10,15 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace Drasi.Sentinel.Host;
 
-public interface IA2aAgentResponder
-{
-    Task<string> RespondAsync(
-        Principal principal,
-        TaskTurnId turn,
-        string input,
-        IReadOnlyList<string> priorAssistantTexts,
-        CancellationToken cancellationToken);
-}
-
-public sealed class MafA2aAgentResponder(AgentManifest? manifest, SafeCatalog catalog, IMafInnerAgent agent) : IA2aAgentResponder
+public sealed class UnconfiguredAgentResponder : IAgentResponder
 {
     public Task<string> RespondAsync(
         Principal principal,
         TaskTurnId turn,
         string input,
         IReadOnlyList<string> priorAssistantTexts,
-        CancellationToken cancellationToken)
-    {
-        if (manifest is null) throw new A2aAgentUnconfiguredException();
-        return agent.RunAsync(
-            new(manifest.Url, manifest.Model),
-            principal,
-            turn,
-            AgentCapabilityProjection.Create(catalog),
-            priorAssistantTexts,
-            input,
-            cancellationToken);
-    }
+        CancellationToken cancellationToken) =>
+        throw new A2aAgentUnconfiguredException();
 }
 
 public sealed class A2aAgentUnconfiguredException() : Exception("No agent is configured in the Sentinel manifest.");
@@ -69,7 +48,7 @@ public static class A2aEndpoint
         IConversationRepository repository,
         IConversationSubscriptions subscriptions,
         ITaskEventNotifier notifier,
-        IA2aAgentResponder responder,
+        IAgentResponder responder,
         A2aAuthenticationManifest authentication)
     {
         A2aMessageRequest request;
@@ -123,7 +102,8 @@ public static class A2aEndpoint
                     request.Message.Text,
                     repository,
                     notifier,
-                    responder);
+                    responder,
+                    context.RequestServices?.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None);
             }
             else
             {
@@ -139,8 +119,8 @@ public static class A2aEndpoint
                 request.UsesInspectorV1);
         }
         catch (A2aAgentUnconfiguredException exception) { return Error(request.RequestId, -32003, exception.Message, "agent_unconfigured", StatusCodes.Status503ServiceUnavailable); }
-        catch (AuthenticationFailedException) { return Error(request.RequestId, -32003, "The configured agent credential is unavailable.", "agent_credential_unavailable", StatusCodes.Status503ServiceUnavailable); }
-        catch (ClientResultException) { return Error(request.RequestId, -32003, "The configured agent endpoint or model is unavailable.", "agent_provider_unavailable", StatusCodes.Status503ServiceUnavailable); }
+        catch (AgentFailureException exception) when (exception.Failure == AgentFailure.CredentialUnavailable) { return Error(request.RequestId, -32003, exception.Message, "agent_credential_unavailable", StatusCodes.Status503ServiceUnavailable); }
+        catch (AgentFailureException exception) when (exception.Failure == AgentFailure.ProviderUnavailable) { return Error(request.RequestId, -32003, exception.Message, "agent_provider_unavailable", StatusCodes.Status503ServiceUnavailable); }
         catch (SentinelException exception) { return Error(request.RequestId, -32002, exception.Message, exception.Code); }
     }
 
@@ -154,7 +134,8 @@ public static class A2aEndpoint
         string input,
         IConversationRepository repository,
         ITaskEventNotifier notifier,
-        IA2aAgentResponder responder)
+        IAgentResponder responder,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -168,7 +149,7 @@ public static class A2aEndpoint
                 turn,
                 input,
                 priorAssistantTexts,
-                CancellationToken.None);
+                cancellationToken);
             await repository.AppendAssistantArtifactAsync(
                 principal,
                 taskId,
@@ -178,8 +159,7 @@ public static class A2aEndpoint
         }
         catch (Exception exception) when (
             exception is A2aAgentUnconfiguredException or
-            AuthenticationFailedException or
-            ClientResultException or
+            AgentFailureException or
             SentinelException)
         {
             await repository.AppendEventAsync(

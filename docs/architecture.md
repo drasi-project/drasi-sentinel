@@ -2,9 +2,13 @@
 
 `ConversationTask` is the durable owner-scoped aggregate. A task owns one
 active `ConversationSubscription` and an ordered event journal.
-`ConversationSubscriptions` validates a model-selected query/reaction against
-the safe catalog, attaches the native reaction, and appends a subscription
-artifact.
+`ConversationSubscriptions` binds the one allowed reaction for a model-selected
+query, attaches the native reaction, and appends a subscription artifact. A
+query with zero or many reactions does not load. An unknown query returns a
+tool result and does not fail the task. The application owns the turn
+instructions, governed tools, and `ILanguageModel` port. A model provider
+implements that port. The host catches `AgentFailureException` and does not
+depend on the provider assembly for the turn.
 
 `GetCurrentTaskResults` takes no asset identifiers or filters. It finds the
 caller's task-owned subscription, obtains current rows for that subscription's

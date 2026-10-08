@@ -8,7 +8,7 @@ using Drasi.Sentinel.Domain;
 namespace Drasi.Sentinel.Application;
 
 public abstract record GovernedToolCall;
-public sealed record SubscribeToChanges(SubscriptionRequest Request) : GovernedToolCall;
+public sealed record SubscribeToQuery(QueryId Query, SubscriptionRequestKey RequestKey) : GovernedToolCall;
 public sealed record ListTaskSubscriptions : GovernedToolCall;
 public sealed record CancelTaskSubscription(SubscriptionId SubscriptionId) : GovernedToolCall;
 public sealed record GetCurrentTaskResults : GovernedToolCall;
@@ -204,7 +204,7 @@ public sealed class ConversationSubscriptions(
     public async Task<ToolResult> InvokeAsync(Principal principal, TaskTurnId turn, GovernedToolCall call, CancellationToken cancellationToken) =>
         call switch
         {
-            SubscribeToChanges subscribe => await SubscribeAsync(principal, turn, subscribe.Request, cancellationToken),
+            SubscribeToQuery subscribe => await SubscribeQueryAsync(principal, turn, subscribe, cancellationToken),
             ListTaskSubscriptions => new("subscriptions", Subscriptions: await repository.ListSubscriptionsAsync(principal.Owner, new(turn.TaskId), cancellationToken)),
             CancelTaskSubscription cancel => await CancelAsync(principal, turn, cancel.SubscriptionId, cancellationToken),
             GetCurrentTaskResults => await GetCurrentResultsAsync(principal, turn, cancellationToken),
@@ -215,9 +215,14 @@ public sealed class ConversationSubscriptions(
         Principal principal, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken) =>
         repository.ReadEventsAsync(principal.Owner, taskId, after, limit, cancellationToken);
 
+    private Task<ToolResult> SubscribeQueryAsync(Principal principal, TaskTurnId turn, SubscribeToQuery subscribe, CancellationToken cancellationToken)
+    {
+        var bound = CatalogBinding.Require(catalog, subscribe.Query);
+        return SubscribeAsync(principal, turn, new(bound.Query, bound.Reaction, subscribe.RequestKey), cancellationToken);
+    }
+
     private async Task<ToolResult> SubscribeAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, CancellationToken cancellationToken)
     {
-        Validate(principal, request);
         var taskId = new ConversationTaskId(turn.TaskId);
         await repository.GetOrCreateTaskAsync(principal, taskId, cancellationToken);
         var existing = await repository.ListSubscriptionsAsync(principal.Owner, taskId, cancellationToken);
@@ -303,11 +308,4 @@ public sealed class ConversationSubscriptions(
         notifier.Notify(persisted.TaskId);
     }
 
-    private void Validate(Principal principal, SubscriptionRequest request)
-    {
-        if (!catalog.Queries.TryGetValue(request.QueryId, out var query) ||
-            !query.AllowedReactions.Contains(request.ReactionId) ||
-            !catalog.Reactions.ContainsKey(request.ReactionId))
-            throw new SentinelException("catalog_rejected", "The selected catalog assets cannot be combined.");
-    }
 }

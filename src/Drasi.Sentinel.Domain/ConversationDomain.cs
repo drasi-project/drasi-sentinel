@@ -103,39 +103,6 @@ public sealed record SafeCatalog(
     IReadOnlyDictionary<QueryId, QueryCatalogItem> Queries,
     IReadOnlyDictionary<ReactionId, ReactionCatalogItem> Reactions);
 
-public sealed record AgentQueryCapability(
-    string Id,
-    string Description,
-    IReadOnlyList<string> AllowedReactions);
-
-public sealed record AgentReactionCapability(string Id);
-
-public sealed record AgentCapabilityProjection(
-    IReadOnlyList<AgentQueryCapability> Queries,
-    IReadOnlyList<AgentReactionCapability> Reactions)
-{
-    public static AgentCapabilityProjection Create(SafeCatalog catalog)
-    {
-        var queries = catalog.Queries.Values
-            .OrderBy(query => query.Id.Value, StringComparer.Ordinal)
-            .Select(query => new AgentQueryCapability(
-                query.Id.Value,
-                query.Description,
-                query.AllowedReactions.Where(catalog.Reactions.ContainsKey)
-                    .Select(reaction => reaction.Value)
-                    .OrderBy(id => id, StringComparer.Ordinal)
-                    .ToArray()))
-            .ToArray();
-        var usableReactions = queries.SelectMany(query => query.AllowedReactions).ToHashSet(StringComparer.Ordinal);
-        var reactions = catalog.Reactions.Values
-            .Where(reaction => usableReactions.Contains(reaction.Id.Value))
-            .OrderBy(reaction => reaction.Id.Value, StringComparer.Ordinal)
-            .Select(reaction => new AgentReactionCapability(reaction.Id.Value))
-            .ToArray();
-        return new(queries, reactions);
-    }
-}
-
 public sealed class SentinelException(string code, string message)
     : Exception(message)
 {

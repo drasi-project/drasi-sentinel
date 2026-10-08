@@ -1,15 +1,11 @@
-using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Drasi.Sentinel.Agent.Maf;
 using Drasi.Sentinel.Application;
 using Drasi.Sentinel.Domain;
 using Drasi.Sentinel.Host;
-using Microsoft.Agents.AI;
 using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.AI;
 
 namespace Drasi.Sentinel.Tests;
 
@@ -60,35 +56,42 @@ public sealed class ModelTurnHistoryTests
     [Fact]
     public void Turn_messages_keep_prior_assistant_text_and_the_current_user_text()
     {
-        var messages = MafTurnMessages.Create(["I can check current results."], "yes");
+        var messages = AgentMessages.Create(["I can check current results."], "yes");
 
         Assert.Equal(2, messages.Count);
-        Assert.Equal(ChatRole.Assistant, messages[0].Role);
+        Assert.Equal(AgentRole.Assistant, messages[0].Role);
         Assert.Equal("I can check current results.", messages[0].Text);
-        Assert.Equal(ChatRole.User, messages[1].Role);
+        Assert.Equal(AgentRole.User, messages[1].Role);
         Assert.Equal("yes", messages[1].Text);
     }
 
     [Fact]
     public async Task Runner_passes_assistant_history_and_the_current_user_text_to_the_model()
     {
-        var agent = new RecordingAgent();
-        var response = await MafTurnRunner.RunAsync(
-            agent,
-            ["I can check current results."],
+        IReadOnlyList<AgentMessage>? seen = null;
+        var responder = new CatalogAgentResponder(Catalog(), UnusedSubscriptions(), new RecordingModel(messages =>
+        {
+            seen = messages;
+            return "reported-rows";
+        }));
+
+        var response = await responder.RespondAsync(
+            Principal(),
+            new("task", "message"),
             "yes",
+            ["I can check current results."],
             CancellationToken.None);
 
         Assert.Equal("reported-rows", response);
-        Assert.NotNull(agent.Messages);
-        Assert.Equal(["I can check current results.", "yes"], agent.Messages.Select(message => message.Text));
-        Assert.Equal([ChatRole.Assistant, ChatRole.User], agent.Messages.Select(message => message.Role));
+        Assert.NotNull(seen);
+        Assert.Equal(["I can check current results.", "yes"], seen.Select(message => message.Text));
+        Assert.Equal([AgentRole.Assistant, AgentRole.User], seen.Select(message => message.Role));
     }
 
     [Fact]
-    public void Instructions_require_current_results_in_the_same_turn()
+    public void Instructions_are_the_only_copy_of_the_turn_procedure()
     {
-        var text = SentinelAgentInstructions.Create(AgentCapabilityProjection.Create(Catalog()));
+        var text = AgentTurn.Render(Catalog());
         foreach (var phrase in new[]
         {
             "list, show, or return the current rows",
@@ -100,20 +103,17 @@ public sealed class ModelTurnHistoryTests
             "Do not call subscribe_to_changes again",
             "short affirmative",
             "check current results",
-            "subscription_not_found",
-            "task_already_has_subscription",
-            SentinelAgentInstructions.ToolRejectedKind,
-            "Do not stop after subscribing",
-            "even when it names the same subject as a catalog example",
+            "tool_rejected",
             "follow Next",
+            "The host binds the reaction",
         })
         {
             Assert.Contains(phrase, text);
         }
 
-        Assert.Contains("get_current_task_results", SentinelAgentInstructions.SubscribeToolDescription);
-        Assert.Contains("subscription_not_found", SentinelAgentInstructions.CurrentResultsToolDescription);
-        Assert.Contains("task_already_has_subscription", SentinelAgentInstructions.SubscribeToolDescription);
+        Assert.Contains("The host binds the reaction", AgentTurn.SubscribeToolDescription);
+        Assert.DoesNotContain("same turn", AgentTurn.SubscribeToolDescription, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("same turn", AgentTurn.CurrentResultsToolDescription, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("invoice", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("paid", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("overdue", text, StringComparison.OrdinalIgnoreCase);
@@ -123,15 +123,14 @@ public sealed class ModelTurnHistoryTests
     [Fact]
     public void Governed_tools_publish_the_current_results_contract()
     {
-        var tools = new MafGovernedToolFactory(UnusedSubscriptions()).Create(
-            Principal(), new("task", "message"), AgentCapabilityProjection.Create(Catalog()));
+        var tools = AgentToolSession.Create(UnusedSubscriptions(), Principal(), new("task", "message"), CancellationToken.None);
 
         Assert.Equal(
-            SentinelAgentInstructions.SubscribeToolDescription,
-            tools.Functions.Single(tool => tool.Name == "subscribe_to_changes").Description);
+            AgentTurn.SubscribeToolDescription,
+            tools.Tools.Single(tool => tool.Name == "subscribe_to_changes").Description);
         Assert.Equal(
-            SentinelAgentInstructions.CurrentResultsToolDescription,
-            tools.Functions.Single(tool => tool.Name == "get_current_task_results").Description);
+            AgentTurn.CurrentResultsToolDescription,
+            tools.Tools.Single(tool => tool.Name == "get_current_task_results").Description);
     }
 
     [Fact]
@@ -142,12 +141,14 @@ public sealed class ModelTurnHistoryTests
 
         var missing = await InvokeAsync(tools, "get_current_task_results");
         Assert.Contains("subscription_not_found", missing);
-        Assert.Contains(SentinelAgentInstructions.ToolRejectedKind, missing);
+        Assert.Contains(AgentTurn.ToolRejectedKind, missing);
         Assert.Contains("get_current_task_results", missing);
         Assert.Contains("Next", missing);
 
-        var created = await InvokeAsync(tools, "subscribe_to_changes", Arguments("query", "reaction"));
+        var created = await InvokeAsync(tools, "subscribe_to_changes", Arguments("query"));
         Assert.Contains("subscription_created", created);
+        Assert.DoesNotContain("tenant", created, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("reaction-", created, StringComparison.Ordinal);
 
         var rows = await InvokeAsync(tools, "get_current_task_results");
         Assert.Contains("current_results", rows);
@@ -165,13 +166,13 @@ public sealed class ModelTurnHistoryTests
         var created = await service.InvokeAsync(
             principal,
             new("task", "message-1"),
-            new SubscribeToChanges(new(new("query"), new("reaction"), new("first"))),
+            new SubscribeToQuery(new("query"), new("first")),
             CancellationToken.None);
         var tools = Tools(service, principal, "message-2");
 
-        var rejected = await InvokeAsync(tools, "subscribe_to_changes", Arguments("query", "reaction"));
+        var rejected = await InvokeAsync(tools, "subscribe_to_changes", Arguments("query"));
         Assert.Contains("task_already_has_subscription", rejected);
-        Assert.Contains(SentinelAgentInstructions.ToolRejectedKind, rejected);
+        Assert.Contains(AgentTurn.ToolRejectedKind, rejected);
         Assert.Contains("Do not call subscribe_to_changes again", rejected);
 
         var rows = await InvokeAsync(tools, "get_current_task_results");
@@ -185,15 +186,40 @@ public sealed class ModelTurnHistoryTests
     }
 
     [Fact]
-    public async Task Unapproved_catalog_selection_still_escapes_the_tool()
+    public async Task Unknown_query_returns_a_tool_result_and_does_not_fail_the_task()
     {
-        var (_, service, principal) = await StartedServiceAsync();
+        var (repository, service, principal) = await StartedServiceAsync();
         var tools = Tools(service, principal, "message-1");
 
-        var exception = await Assert.ThrowsAnyAsync<Exception>(() =>
-            InvokeAsync(tools, "subscribe_to_changes", Arguments("unknown", "reaction")));
+        var rejected = await InvokeAsync(tools, "subscribe_to_changes", Arguments("unknown"));
 
-        Assert.Equal("catalog_rejected", RequireSentinel(exception).Code);
+        Assert.Contains("query_unknown", rejected);
+        Assert.Contains(AgentTurn.ToolRejectedKind, rejected);
+        await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
+        Assert.DoesNotContain(
+            await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 20, CancellationToken.None),
+            item => item.Kind == ConversationEventKind.TaskFailed);
+    }
+
+    [Fact]
+    public async Task Invalid_cancel_id_returns_a_tool_result()
+    {
+        var tools = Tools(UnusedSubscriptions(), Principal(), "message-1");
+
+        var rejected = await InvokeAsync(tools, "cancel_task_subscription", Arguments("not-a-guid", "id"));
+
+        Assert.Contains("invalid_subscription_id", rejected);
+        Assert.Contains(AgentTurn.ToolRejectedKind, rejected);
+    }
+
+    [Fact]
+    public async Task Tool_call_observes_the_turn_token()
+    {
+        using var source = new CancellationTokenSource();
+        source.Cancel();
+        var tools = AgentToolSession.Create(UnusedSubscriptions(), Principal(), new("task", "message"), source.Token);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tools.InvokeAsync("get_current_task_results"));
     }
 
     [Theory]
@@ -231,26 +257,6 @@ public sealed class ModelTurnHistoryTests
         Assert.Contains(events, item => item.Kind == ConversationEventKind.AssistantArtifact && item.Content == "reported-rows");
     }
 
-    [Fact]
-    public async Task Responder_forwards_prior_assistant_text_to_the_inner_agent()
-    {
-        var inner = new RecordingInnerAgent();
-        var responder = new MafA2aAgentResponder(
-            new AgentManifest(new Uri("https://example.invalid"), "model"),
-            Catalog(),
-            inner);
-
-        await responder.RespondAsync(
-            Principal(),
-            new("task", "message"),
-            "yes",
-            ["I can check current results."],
-            CancellationToken.None);
-
-        Assert.Equal("yes", inner.Input);
-        Assert.Equal(["I can check current results."], inner.PriorAssistantTexts);
-    }
-
     private static async Task WaitForArtifactAsync(
         IConversationRepository repository,
         Principal principal,
@@ -281,38 +287,17 @@ public sealed class ModelTurnHistoryTests
             new(taskId, default, kind, null, content, DateTimeOffset.UtcNow),
             CancellationToken.None);
 
-    private static MafGovernedToolSet Tools(IConversationSubscriptions service, Principal principal, string messageId) =>
-        new MafGovernedToolFactory(service).Create(
-            principal,
-            new("task", messageId),
-            AgentCapabilityProjection.Create(Catalog()));
+    private static AgentToolSession Tools(IConversationSubscriptions service, Principal principal, string messageId) =>
+        AgentToolSession.Create(service, principal, new("task", messageId), CancellationToken.None);
 
-    private static async Task<string> InvokeAsync(
-        MafGovernedToolSet tools,
+    private static Task<string> InvokeAsync(
+        AgentToolSession tools,
         string name,
-        AIFunctionArguments? arguments = null)
-    {
-        var function = tools.Functions.Single(tool => tool.Name == name);
-        var result = await function.InvokeAsync(arguments ?? new AIFunctionArguments(), CancellationToken.None);
-        return result?.ToString() ?? "";
-    }
+        IReadOnlyDictionary<string, string?>? arguments = null) =>
+        tools.InvokeAsync(name, arguments);
 
-    private static AIFunctionArguments Arguments(string query, string reaction)
-    {
-        var arguments = new AIFunctionArguments { ["query"] = query, ["reaction"] = reaction };
-        return arguments;
-    }
-
-    private static SentinelException RequireSentinel(Exception exception)
-    {
-        for (Exception? current = exception; current is not null; current = current.InnerException)
-        {
-            if (current is SentinelException sentinel)
-                return sentinel;
-        }
-
-        throw new InvalidOperationException(exception.ToString(), exception);
-    }
+    private static IReadOnlyDictionary<string, string?> Arguments(string value, string name = "query") =>
+        new Dictionary<string, string?> { [name] = value };
 
     private static async Task<(InMemorySentinelRepository Repository, ConversationSubscriptions Service, Principal Principal)> StartedServiceAsync()
     {
@@ -353,7 +338,17 @@ public sealed class ModelTurnHistoryTests
         },
         new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
 
-    private sealed class RecordingResponder : IA2aAgentResponder
+    private sealed class RecordingModel(Func<IReadOnlyList<AgentMessage>, string> complete) : ILanguageModel
+    {
+        public Task<string> CompleteAsync(
+            string instructions,
+            IAgentTools tools,
+            IReadOnlyList<AgentMessage> messages,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(complete(messages));
+    }
+
+    private sealed class RecordingResponder : IAgentResponder
     {
         public string? Input { get; private set; }
         public IReadOnlyList<string>? PriorAssistantTexts { get; private set; }
@@ -371,67 +366,5 @@ public sealed class ModelTurnHistoryTests
             Completed.TrySetResult();
             return Task.FromResult("reported-rows");
         }
-    }
-
-    private sealed class RecordingInnerAgent : IMafInnerAgent
-    {
-        public string? Input { get; private set; }
-        public IReadOnlyList<string>? PriorAssistantTexts { get; private set; }
-
-        public Task<string> RunAsync(
-            MafAgentSettings settings,
-            Principal principal,
-            TaskTurnId turn,
-            AgentCapabilityProjection capabilities,
-            IReadOnlyList<string> priorAssistantTexts,
-            string input,
-            CancellationToken cancellationToken)
-        {
-            Input = input;
-            PriorAssistantTexts = priorAssistantTexts;
-            return Task.FromResult("reported-rows");
-        }
-    }
-
-    private sealed class RecordingAgent : AIAgent
-    {
-        public IReadOnlyList<ChatMessage>? Messages { get; private set; }
-
-        protected override Task<AgentResponse> RunCoreAsync(
-            IEnumerable<ChatMessage> messages,
-            AgentSession? session,
-            AgentRunOptions? options,
-            CancellationToken cancellationToken)
-        {
-            Messages = messages.ToArray();
-            return Task.FromResult(new AgentResponse(new ChatMessage(ChatRole.Assistant, "reported-rows")));
-        }
-
-        protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
-            IEnumerable<ChatMessage> messages,
-            AgentSession? session,
-            AgentRunOptions? options,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            await Task.CompletedTask;
-            yield break;
-        }
-
-        protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken) =>
-            new(new RecordingSession());
-
-        protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-            AgentSession session,
-            JsonSerializerOptions? options,
-            CancellationToken cancellationToken) =>
-            new(JsonDocument.Parse("{}").RootElement.Clone());
-
-        protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-            JsonElement serializedState,
-            JsonSerializerOptions? options,
-            CancellationToken cancellationToken) =>
-            new(new RecordingSession());
-
-        private sealed class RecordingSession : AgentSession;
     }
 }

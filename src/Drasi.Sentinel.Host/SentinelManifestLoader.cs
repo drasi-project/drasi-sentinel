@@ -113,6 +113,10 @@ public static class SentinelManifestLoader
                 reaction => reaction.Key,
                 reaction => new ReactionCatalogItem(reaction.Key)));
 
+        var unbound = CatalogBinding.From(catalog).OfType<UnboundQuery>().FirstOrDefault();
+        if (unbound is not null)
+            throw new ManifestLoadException($"Query '{unbound.Query.Value}' must allow exactly one reaction.");
+
         return new SentinelManifest(
             agent,
             profile,

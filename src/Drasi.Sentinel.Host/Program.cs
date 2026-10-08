@@ -53,12 +53,21 @@ builder.Services.AddSingleton<IConversationSubscriptions>(services => new Conver
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
     TimeProvider.System));
-builder.Services.AddSingleton<IMafInnerAgent>(services => new AzureOpenAiMafInnerAgent(
-    services.GetRequiredService<IConversationSubscriptions>()));
-builder.Services.AddSingleton<IA2aAgentResponder>(services => new MafA2aAgentResponder(
-    manifest.Agent,
-    manifest.SafeCatalog,
-    services.GetRequiredService<IMafInnerAgent>()));
+if (manifest.Agent is { } agent)
+{
+    builder.Services.AddSingleton<ILanguageModel>(_ => MafLanguageModel.Create(
+        agent.Url,
+        agent.Model,
+        manifest.Profile == ServiceProfile.Demo ? ModelCredentialKind.AzureCli : ModelCredentialKind.DefaultAzure));
+    builder.Services.AddSingleton<IAgentResponder>(services => new CatalogAgentResponder(
+        manifest.SafeCatalog,
+        services.GetRequiredService<IConversationSubscriptions>(),
+        services.GetRequiredService<ILanguageModel>()));
+}
+else
+{
+    builder.Services.AddSingleton<IAgentResponder, UnconfiguredAgentResponder>();
+}
 
 var app = builder.Build();
 var engine = app.Services.GetRequiredService<INativeEngine>();

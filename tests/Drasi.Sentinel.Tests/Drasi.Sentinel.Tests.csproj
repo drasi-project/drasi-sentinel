@@ -25,7 +25,6 @@
     <ProjectReference Include="..\..\src\Drasi.Sentinel.Domain\Drasi.Sentinel.Domain.csproj" />
     <ProjectReference Include="..\..\src\Drasi.Sentinel.Application\Drasi.Sentinel.Application.csproj" />
     <ProjectReference Include="..\..\src\Drasi.Sentinel.Host\Drasi.Sentinel.Host.csproj" />
-    <ProjectReference Include="..\..\src\Drasi.Sentinel.Agent.Maf\Drasi.Sentinel.Agent.Maf.csproj" />
   </ItemGroup>
 
 </Project>

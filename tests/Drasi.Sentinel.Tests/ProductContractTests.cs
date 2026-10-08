@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Drasi.Sentinel.Agent.Maf;
 using Drasi.Sentinel.Application;
 using Drasi.Sentinel.Domain;
 using Drasi.Sentinel.Host;
@@ -27,7 +26,7 @@ public sealed class ProductContractTests
     [Fact]
     public void Agent_tools_do_not_expose_filters_confirmations_or_destinations()
     {
-        var names = MafGovernedToolSet.Names;
+        var names = AgentTurn.ToolNames;
 
         Assert.Contains("subscribe_to_changes", names);
         Assert.Contains("get_current_task_results", names);
@@ -36,6 +35,21 @@ public sealed class ProductContractTests
             name.Contains("confirm", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("destination", StringComparison.OrdinalIgnoreCase));
         Assert.Empty(typeof(GetCurrentTaskResults).GetProperties());
+        var host = Path.Combine(FindRepositoryRoot(), "src", "Drasi.Sentinel.Host");
+        var hostSource = string.Join('\n', Directory.EnumerateFiles(host, "*.cs").Select(File.ReadAllText));
+        Assert.DoesNotContain("AuthenticationFailedException", hostSource);
+        Assert.DoesNotContain("ClientResultException", hostSource);
+        Assert.DoesNotContain("AzureCliCredential", hostSource);
+        var endpoint = File.ReadAllText(Path.Combine(host, "A2aEndpoint.cs"));
+        Assert.DoesNotContain("Drasi.Sentinel.Agent.Maf", endpoint);
+        Assert.DoesNotContain("ModelAdapterException", endpoint);
+        var application = string.Join(
+            '\n',
+            Directory.EnumerateFiles(Path.Combine(FindRepositoryRoot(), "src", "Drasi.Sentinel.Application"), "*.cs")
+                .Select(File.ReadAllText));
+        Assert.DoesNotContain("Microsoft.Agents", application);
+        Assert.DoesNotContain("AIFunction", application);
+        Assert.DoesNotContain("Azure.", application);
     }
 
     [Fact]
