@@ -5,6 +5,11 @@ using Drasi.Sentinel.Domain;
 
 namespace Drasi.Sentinel.Application;
 
+public interface IArtifactWebhook
+{
+    Task DeliverAsync(string artifactJson, CancellationToken cancellationToken);
+}
+
 public interface INativeResultIngestion
 {
     void Enqueue(NativeSubscriptionId subscriptionId, NativeQueryDiff diff);
@@ -15,7 +20,8 @@ public interface INativeResultIngestion
 public sealed class NativeResultIngestion(
     IConversationRepository repository,
     ITaskEventNotifier notifier,
-    TimeProvider timeProvider) : INativeResultIngestion
+    TimeProvider timeProvider,
+    IArtifactWebhook? webhook = null) : INativeResultIngestion
 {
     private static readonly JsonSerializerOptions ArtifactJsonOptions = new()
     {
@@ -78,6 +84,15 @@ public sealed class NativeResultIngestion(
                 occurredAt),
             cancellationToken);
         notifier.Notify(persisted.TaskId);
+        if (webhook is null)
+            return;
+        try
+        {
+            await webhook.DeliverAsync(persisted.Content, CancellationToken.None);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private sealed record NativeDelivery(NativeSubscriptionId SubscriptionId, NativeQueryDiff Diff);

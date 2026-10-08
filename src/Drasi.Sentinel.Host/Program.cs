@@ -17,10 +17,13 @@ builder.Services.AddSingleton<PostgresSentinelRepository>(_ =>
 builder.Services.AddSingleton<IConversationRepository>(services =>
     services.GetRequiredService<PostgresSentinelRepository>());
 builder.Services.AddSingleton<ITaskEventNotifier, TaskEventNotifier>();
+if (manifest.WebhookUrl is { } webhookUrl)
+    builder.Services.AddSingleton<IArtifactWebhook>(_ => new HttpArtifactWebhook(webhookUrl));
 builder.Services.AddSingleton(services => new NativeResultIngestion(
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
-    TimeProvider.System));
+    TimeProvider.System,
+    services.GetService<IArtifactWebhook>()));
 builder.Services.AddSingleton<INativeResultIngestion>(services =>
     services.GetRequiredService<NativeResultIngestion>());
 builder.Services.AddSingleton(manifest.A2aAuthentication);

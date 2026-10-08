@@ -31,7 +31,8 @@ public sealed class SentinelManifest
         SafeCatalog safeCatalog,
         ExecutableCatalog executableCatalog,
         string databaseConnectionString,
-        string directory)
+        string directory,
+        Uri? webhookUrl)
     {
         Agent = agent;
         Profile = profile;
@@ -40,12 +41,14 @@ public sealed class SentinelManifest
         ExecutableCatalog = executableCatalog;
         DatabaseConnectionString = databaseConnectionString;
         Directory = directory;
+        WebhookUrl = webhookUrl;
     }
 
     public AgentManifest? Agent { get; }
     public ServiceProfile Profile { get; }
     public A2aAuthenticationManifest A2aAuthentication { get; }
     public SafeCatalog SafeCatalog { get; }
+    public Uri? WebhookUrl { get; }
     internal ExecutableCatalog ExecutableCatalog { get; }
     internal string DatabaseConnectionString { get; }
     internal string Directory { get; }
@@ -94,6 +97,7 @@ public static class SentinelManifestLoader
         var agent = ReadAgent(root);
         var service = RequireMapping(Required(root, "service", "manifest"), "service");
         var profile = ReadProfile(service);
+        var webhookUrl = ReadWebhook(service);
         var databaseConnectionString = ReadDatabaseConnectionString(service, manifestPath);
         var a2aAuthentication = ReadA2aAuthentication(service, profile, manifestPath);
         var sources = ReadEntries(root, "sources")
@@ -134,7 +138,8 @@ public static class SentinelManifestLoader
                     query => new ExecutableQuery(query.Key, query.Value.Cypher, query.Value.SourceIds))),
             databaseConnectionString,
             Path.GetDirectoryName(Path.GetFullPath(manifestPath))
-                ?? throw new ManifestLoadException("The manifest path has no parent directory."));
+                ?? throw new ManifestLoadException("The manifest path has no parent directory."),
+            webhookUrl);
     }
 
     private static bool IsYamlPath(string path) =>
@@ -395,7 +400,7 @@ public static class SentinelManifestLoader
 
     private static ServiceProfile ReadProfile(YamlMappingNode service)
     {
-        RequireOnlyKeys(service, "service", "profile", "database", "a2a");
+        RequireOnlyKeys(service, "service", "profile", "database", "a2a", "webhook");
         return RequiredScalar(service, "profile", "service") switch
         {
             "demo" => ServiceProfile.Demo,
@@ -404,6 +409,18 @@ public static class SentinelManifestLoader
             _ => throw new ManifestLoadException(
                 "service.profile must be one of 'demo', 'development', or 'production'."),
         };
+    }
+
+    private static Uri? ReadWebhook(YamlMappingNode service)
+    {
+        if (!service.Children.TryGetValue(new YamlScalarNode("webhook"), out var node))
+            return null;
+        var webhook = RequireMapping(node, "service.webhook");
+        RequireOnlyKeys(webhook, "service.webhook", "url");
+        var url = RequiredScalar(webhook, "url", "service.webhook");
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("http" or "https"))
+            throw new ManifestLoadException("service.webhook.url must be an absolute http or https URL.");
+        return parsed;
     }
 
     private static string ReadDatabaseConnectionString(YamlMappingNode service, string manifestPath)

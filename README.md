@@ -25,7 +25,8 @@ messages and protobuf-style text parts remain supported.
 
 PostgreSQL stores owner-scoped conversation tasks, task-owned subscriptions,
 and append-only task events. Every native query diff appends an A2A JSON data
-artifact to that journal. Each artifact retains the native diff type, raw JSON
+artifact to that journal. If `service.webhook.url` is set, the same JSON is
+also posted to that URL after the journal write. Each artifact retains the native diff type, raw JSON
 data, before/after values, grouping keys, and metadata when supplied, alongside
 its subscription, query, reaction, and occurrence time.
 

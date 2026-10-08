@@ -21,7 +21,10 @@ unknown subscriptions, then appends one JSON artifact for every native query
 diff without filtering or deduplicating it. Artifacts preserve the native diff
 type, raw JSON data, before/after values, grouping keys, and metadata when
 supplied, plus the subscription, query, reaction, and occurrence time. The
-journal is the delivery mechanism.
+journal is the delivery mechanism. If the manifest sets
+`service.webhook.url`, the same native diff JSON is also posted there after
+the journal write. A failed post does not drop the artifact or fail the watch.
+The webhook is operator configuration, not a model-selected destination.
 
 The Host maps journal entries to JSON-RPC SSE events for
 `SendStreamingMessage` and `SubscribeToTask`. Readers replay entries after

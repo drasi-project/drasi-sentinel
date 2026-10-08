@@ -80,6 +80,9 @@ public sealed class ExampleManifestTests
                     ? typeof(A2aAnonymousManifest)
                     : typeof(A2aJwtManifest),
                 manifest.A2aAuthentication);
+            Assert.Equal(
+                exampleName == "accounting-local-demo" ? new Uri("http://127.0.0.1:8082/") : null,
+                manifest.WebhookUrl);
         }
         finally
         {

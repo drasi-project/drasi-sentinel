@@ -14,6 +14,7 @@ readonly SENTINEL_CONNECTION="$EXAMPLE_DIR/secrets/sentinel-connection.txt"
 
 host_pid=""
 inspector_pid=""
+webhook_pid=""
 
 choose_port() {
 	python3 - <<'PY'
@@ -43,6 +44,7 @@ cleanup() {
 	local status=$?
 	stop_process "$host_pid"
 	stop_process "$inspector_pid"
+	stop_process "$webhook_pid"
 	"$BOOTSTRAP" stop >/dev/null 2>&1 || true
 	exit "$status"
 }
@@ -72,7 +74,12 @@ fi
 trap cleanup EXIT INT TERM
 printf 'Preparing local PostgreSQL.\n'
 "$BOOTSTRAP" start >/dev/null
-printf 'Starting Sentinel and A2A Inspector.\n'
+printf 'Starting the local webhook receiver, Sentinel, and A2A Inspector.\n'
+webhook_log="$EXAMPLE_DIR/secrets/webhook-events.jsonl"
+rm -f "$webhook_log"
+python3 "$EXAMPLE_DIR/capture_receiver.py" --bind 127.0.0.1 --port 8082 --output "$webhook_log" \
+	>"$EXAMPLE_DIR/secrets/webhook.log" 2>&1 &
+webhook_pid=$!
 rm -f "$SENTINEL_CONNECTION"
 host_url="http://127.0.0.1:$(choose_port)"
 (
@@ -86,6 +93,11 @@ host_pid=$!
 	exec env A2A_INSPECTOR_PORT=8081 bash "$INSPECTOR_RUNNER"
 ) >"$EXAMPLE_DIR/secrets/inspector.log" 2>&1 &
 inspector_pid=$!
+
+until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8082), 1).close()' >/dev/null 2>&1; do
+	kill -0 "$webhook_pid" >/dev/null 2>&1 || { cat "$EXAMPLE_DIR/secrets/webhook.log" >&2; exit 1; }
+	sleep 1
+done
 
 until curl --silent --fail "$host_url/healthz" >/dev/null; do
 	kill -0 "$host_pid" >/dev/null 2>&1 || { cat "$HOST_LOG" >&2; exit 1; }
@@ -112,6 +124,7 @@ Connect A2A Inspector to:
   Inspector UI: http://127.0.0.1:8081/
   Agent Card URL: $host_url/.well-known/agent-card.json
   Agent endpoint: $host_url/a2a/
+  Webhook capture: $webhook_log
 
 In A2A Inspector, click Send streaming and ask:
   Tell me when an invoice is paid.
@@ -143,6 +156,8 @@ docker exec $CONTAINER_NAME psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \\
   -c "UPDATE invoices SET paid = true WHERE invoice_id = 'invoice-demo-001'"
 
 That SQL update marks the invoice paid and adds it to the result set.
+The same diff JSON is also posted to http://127.0.0.1:8082/ and appended to:
+  $webhook_log
 
 EOF
 wait "$host_pid"

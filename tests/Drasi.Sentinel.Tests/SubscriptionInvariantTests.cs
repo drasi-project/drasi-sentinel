@@ -156,6 +156,28 @@ public sealed class SubscriptionInvariantTests
     }
 
     [Fact]
+    public async Task Webhook_receives_the_journaled_diff_and_a_failure_does_not_drop_it()
+    {
+        var repository = new InMemorySentinelRepository();
+        var principal = Principal();
+        await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
+        var subscription = await repository.GetOrCreateSubscriptionAsync(
+            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Active, new("reaction-webhook"), DateTimeOffset.UtcNow),
+            CancellationToken.None);
+        var webhook = new RecordingWebhook();
+        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System, webhook);
+
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("Add", "entity-200", "one"), CancellationToken.None);
+        webhook.Fail = true;
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("Update", "entity-200", "two"), CancellationToken.None);
+
+        Assert.Equal(2, webhook.Bodies.Count);
+        Assert.Contains("native_query_diff", webhook.Bodies[0]);
+        Assert.Equal(2, (await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None))
+            .Count(item => item.Kind == ConversationEventKind.Observation));
+    }
+
+    [Fact]
     public async Task Queued_native_diff_is_written_by_the_delivery_loop()
     {
         var (service, repository, principal) = await CreateAsync();
@@ -293,6 +315,17 @@ public sealed class SubscriptionInvariantTests
     private static SafeCatalog Catalog() => new(
         new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }, []) },
         new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
+
+    private sealed class RecordingWebhook : IArtifactWebhook
+    {
+        public bool Fail { get; set; }
+        public List<string> Bodies { get; } = [];
+        public Task DeliverAsync(string artifactJson, CancellationToken cancellationToken)
+        {
+            Bodies.Add(artifactJson);
+            return Fail ? Task.FromException(new HttpRequestException("webhook unavailable")) : Task.CompletedTask;
+        }
+    }
 
     private sealed class ToggleEngine : INativeEngine
     {

@@ -1,7 +1,8 @@
 # Examples
 
 The examples define curated continuous queries and task-stream reaction
-policies. They report changes on the A2A task stream.
+policies. They report changes on the A2A task stream. The local accounting
+demo also posts each native diff to a local webhook receiver.
 
 After a task has its subscription, ask for its current results. The agent
 returns a task-stream data artifact for that task's curated query; do not
