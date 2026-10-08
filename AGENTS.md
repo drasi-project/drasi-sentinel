@@ -39,10 +39,13 @@ Inspector at `http://127.0.0.1:8081`.
 ## Product constraints
 
 - A change watch is one durable A2A task with one curated subscription.
-- A subscription selects a curated query and reaction only. Do not add
+- A subscription selects one query and the host-bound reaction only. Do not add
   filters, confirmation codes, or model-selected destinations. An optional
   operator webhook may copy each journaled native diff. It is not the
   primary contract and the model does not choose it.
+- When `service.query_authoring.enabled` is true, the agent may create a query
+  against the manifest's sources. Sources stay curated. The model does not see
+  connection settings, and the new query still becomes one task subscription.
 - Report every Drasi query diff as a JSON A2A artifact.
 - Use standard A2A JSON-RPC/SSE streaming and `SubscribeToTask` for consumer
   delivery and replay. Do not add a proprietary transport as the primary

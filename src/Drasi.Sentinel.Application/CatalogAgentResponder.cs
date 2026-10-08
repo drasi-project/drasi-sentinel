@@ -5,7 +5,9 @@ namespace Drasi.Sentinel.Application;
 public sealed class CatalogAgentResponder(
     SafeCatalog catalog,
     IConversationSubscriptions commands,
-    ILanguageModel model) : IAgentResponder
+    ILanguageModel model,
+    IQueryWorkbench? workbench = null,
+    QueryAuthoringPrompt? authoringPrompt = null) : IAgentResponder
 {
     public Task<string> RespondAsync(
         Principal principal,
@@ -15,9 +17,9 @@ public sealed class CatalogAgentResponder(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken);
+        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken, workbench);
         return model.CompleteAsync(
-            AgentTurn.Render(catalog),
+            AgentTurn.Render(catalog, authoringPrompt),
             tools,
             AgentMessages.Create(priorAssistantTexts, input),
             cancellationToken);

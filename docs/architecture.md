@@ -5,7 +5,11 @@ active `ConversationSubscription` and an ordered event journal.
 `ConversationSubscriptions` binds the one allowed reaction for a model-selected
 query, attaches the native reaction, and appends a subscription artifact. A
 query with zero or many reactions does not load. An unknown query returns a
-tool result and does not fail the task. The application owns the turn
+tool result and does not fail the task. If `service.query_authoring.enabled`
+is true, the catalog has exactly one reaction and the model may test and commit
+a Cypher query against those sources. The committed query is stored, registered
+on the engine at startup, and then subscribed like any other catalog query.
+The model does not receive source connection settings. The application owns the turn
 instructions, governed tools, and `ILanguageModel` port. A model provider
 implements that port. The host catches `AgentFailureException` and does not
 depend on the provider assembly for the turn.

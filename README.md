@@ -3,7 +3,9 @@
 Sentinel is a governed A2A change-detection agent. Callers describe a supported
 change in natural language. The bounded agent selects a curated query/reaction
 pair, creates an active task-owned subscription, and reports later observations
-on the same A2A task. Consumers can also ask for current results on that task.
+on the same A2A task. If the manifest enables query authoring, the agent can
+also build a query against the configured sources and then subscribe to it.
+Consumers can also ask for current results on that task.
 The agent resolves the task's sole subscription and its curated query internally;
 the request accepts no query, source, Cypher, or filter input.
 
@@ -38,7 +40,10 @@ the native query `rows`.
 
 Queries and reactions are curated assets. A natural-language request selects
 only one approved query/reaction pair; source configuration and Cypher stay
-private to the host.
+private to the host. Set `service.query_authoring.enabled` to `true` only when
+the manifest has exactly one reaction. The agent may then create queries against
+the declared sources. It still cannot create sources, choose a destination, or
+see connection settings.
 
 ```yaml
 queries:

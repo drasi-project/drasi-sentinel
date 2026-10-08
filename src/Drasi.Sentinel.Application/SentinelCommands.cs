@@ -86,7 +86,7 @@ public sealed record DrasiTopology(
     IReadOnlyList<DrasiPluginSourceDefinition> Sources,
     IReadOnlyList<DrasiQueryDefinition> Queries);
 
-public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultIngestion? resultIngestion = null) : INativeEngine
+public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeResultIngestion? resultIngestion = null) : INativeEngine
 {
     private Engine? _engine;
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -99,8 +99,8 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
             await engine.AddSourceAsync(source.Kind, source.Id, source.Configuration, bootstrap: source.Bootstrap, cancellationToken: cancellationToken);
         foreach (var query in topology.Queries)
         {
-            await engine.AddQueryAsync($"query-{query.Id.Value}", query.Cypher, query.SourceIds, new QueryOptions { EnableBootstrap = true }, cancellationToken);
-            await engine.WaitForQueryAsync($"query-{query.Id.Value}", null, cancellationToken);
+            await engine.AddQueryAsync(NativeQueryId(query.Id), query.Cypher, query.SourceIds, new QueryOptions { EnableBootstrap = true }, cancellationToken);
+            await engine.WaitForQueryAsync(NativeQueryId(query.Id), null, cancellationToken);
         }
         _engine = engine;
     }
@@ -108,7 +108,7 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
     public Task AttachAsync(ConversationSubscription subscription, CancellationToken cancellationToken) =>
         RequireEngine().AddReactionAsync(
             subscription.NativeSubscriptionId.Value,
-            [$"query-{subscription.Request.QueryId.Value}"],
+            [NativeQueryId(subscription.Request.QueryId)],
             result => IngestResult(subscription.NativeSubscriptionId, result),
             true,
             cancellationToken);
@@ -119,7 +119,7 @@ public sealed class DrasiNativeEngine(DrasiTopology topology, INativeResultInges
     public async Task<IReadOnlyList<JsonNode>> GetQueryResultsAsync(QueryId queryId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var rows = await RequireEngine().GetQueryResultsAsync($"query-{queryId.Value}");
+        var rows = await RequireEngine().GetQueryResultsAsync(NativeQueryId(queryId));
         return rows.Select(row => row.DeepClone()).ToArray();
     }
 

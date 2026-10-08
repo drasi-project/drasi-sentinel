@@ -103,8 +103,19 @@ public sealed record SafeCatalog(
     IReadOnlyDictionary<QueryId, QueryCatalogItem> Queries,
     IReadOnlyDictionary<ReactionId, ReactionCatalogItem> Reactions);
 
-public sealed class SentinelException(string code, string message)
-    : Exception(message)
+public sealed class SentinelException : Exception
 {
-    public string Code { get; } = code;
+    public SentinelException(string code, string message)
+        : base(message)
+    {
+        Code = code;
+    }
+
+    public SentinelException(string code, string message, Exception innerException)
+        : base(message, innerException)
+    {
+        Code = code;
+    }
+
+    public string Code { get; }
 }

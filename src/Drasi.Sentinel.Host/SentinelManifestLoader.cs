@@ -32,7 +32,8 @@ public sealed class SentinelManifest
         ExecutableCatalog executableCatalog,
         string databaseConnectionString,
         string directory,
-        Uri? webhookUrl)
+        Uri? webhookUrl,
+        bool queryAuthoringEnabled)
     {
         Agent = agent;
         Profile = profile;
@@ -42,6 +43,7 @@ public sealed class SentinelManifest
         DatabaseConnectionString = databaseConnectionString;
         Directory = directory;
         WebhookUrl = webhookUrl;
+        QueryAuthoringEnabled = queryAuthoringEnabled;
     }
 
     public AgentManifest? Agent { get; }
@@ -49,6 +51,7 @@ public sealed class SentinelManifest
     public A2aAuthenticationManifest A2aAuthentication { get; }
     public SafeCatalog SafeCatalog { get; }
     public Uri? WebhookUrl { get; }
+    public bool QueryAuthoringEnabled { get; }
     internal ExecutableCatalog ExecutableCatalog { get; }
     internal string DatabaseConnectionString { get; }
     internal string Directory { get; }
@@ -98,6 +101,7 @@ public static class SentinelManifestLoader
         var service = RequireMapping(Required(root, "service", "manifest"), "service");
         var profile = ReadProfile(service);
         var webhookUrl = ReadWebhook(service);
+        var queryAuthoringEnabled = ReadQueryAuthoring(service);
         var databaseConnectionString = ReadDatabaseConnectionString(service, manifestPath);
         var a2aAuthentication = ReadA2aAuthentication(service, profile, manifestPath);
         var sources = ReadEntries(root, "sources")
@@ -125,6 +129,8 @@ public static class SentinelManifestLoader
                     $"Query '{unbound.Query.Value}' allows unknown reaction '{unbound.Missing?.Value}'.",
                 _ => $"Query '{unbound.Query.Value}' must allow exactly one reaction.",
             });
+        if (queryAuthoringEnabled && reactions.Count != 1)
+            throw new ManifestLoadException("service.query_authoring.enabled requires exactly one reaction.");
 
         return new SentinelManifest(
             agent,
@@ -139,7 +145,8 @@ public static class SentinelManifestLoader
             databaseConnectionString,
             Path.GetDirectoryName(Path.GetFullPath(manifestPath))
                 ?? throw new ManifestLoadException("The manifest path has no parent directory."),
-            webhookUrl);
+            webhookUrl,
+            queryAuthoringEnabled);
     }
 
     private static bool IsYamlPath(string path) =>
@@ -400,7 +407,7 @@ public static class SentinelManifestLoader
 
     private static ServiceProfile ReadProfile(YamlMappingNode service)
     {
-        RequireOnlyKeys(service, "service", "profile", "database", "a2a", "webhook");
+        RequireOnlyKeys(service, "service", "profile", "database", "a2a", "webhook", "query_authoring");
         return RequiredScalar(service, "profile", "service") switch
         {
             "demo" => ServiceProfile.Demo,
@@ -421,6 +428,20 @@ public static class SentinelManifestLoader
         if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("http" or "https"))
             throw new ManifestLoadException("service.webhook.url must be an absolute http or https URL.");
         return parsed;
+    }
+
+    private static bool ReadQueryAuthoring(YamlMappingNode service)
+    {
+        if (!service.Children.TryGetValue(new YamlScalarNode("query_authoring"), out var node))
+            return false;
+        var authoring = RequireMapping(node, "service.query_authoring");
+        RequireOnlyKeys(authoring, "service.query_authoring", "enabled");
+        return RequiredScalar(authoring, "enabled", "service.query_authoring") switch
+        {
+            "true" => true,
+            "false" => false,
+            _ => throw new ManifestLoadException("service.query_authoring.enabled must be true or false."),
+        };
     }
 
     private static string ReadDatabaseConnectionString(YamlMappingNode service, string manifestPath)

@@ -83,6 +83,7 @@ public sealed class ExampleManifestTests
             Assert.Equal(
                 exampleName == "accounting-local-demo" ? new Uri("http://127.0.0.1:8082/") : null,
                 manifest.WebhookUrl);
+            Assert.Equal(exampleName == "accounting-local-demo", manifest.QueryAuthoringEnabled);
         }
         finally
         {

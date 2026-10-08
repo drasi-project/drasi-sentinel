@@ -8,20 +8,21 @@ public static class AgentCard
         ServiceProfile profile,
         A2aAuthenticationManifest authentication,
         Uri publicBaseUri,
-        SafeCatalog catalog) =>
+        SafeCatalog catalog,
+        bool queryAuthoring = false) =>
         authentication switch
         {
-            A2aJwtManifest => Protected(publicBaseUri, authentication, catalog),
-            A2aAnonymousManifest when profile == ServiceProfile.Demo => Anonymous(publicBaseUri, catalog),
+            A2aJwtManifest => Protected(publicBaseUri, authentication, catalog, queryAuthoring),
+            A2aAnonymousManifest when profile == ServiceProfile.Demo => Anonymous(publicBaseUri, catalog, queryAuthoring),
             A2aAnonymousManifest => throw new ArgumentException(
                 "Anonymous A2A authentication is only valid for the demo profile.",
                 nameof(profile)),
             _ => throw new ArgumentOutOfRangeException(nameof(authentication)),
         };
 
-    private static object Protected(Uri publicBaseUri, A2aAuthenticationManifest authentication, SafeCatalog catalog)
+    private static object Protected(Uri publicBaseUri, A2aAuthenticationManifest authentication, SafeCatalog catalog, bool queryAuthoring)
     {
-        var card = Card(publicBaseUri, catalog);
+        var card = Card(publicBaseUri, catalog, queryAuthoring);
         card["securitySchemes"] = new
         {
             bearerAuth = new { type = "http", scheme = "bearer", bearerFormat = "JWT" },
@@ -33,12 +34,13 @@ public static class AgentCard
         return card;
     }
 
-    private static object Anonymous(Uri publicBaseUri, SafeCatalog catalog) => Card(publicBaseUri, catalog);
+    private static object Anonymous(Uri publicBaseUri, SafeCatalog catalog, bool queryAuthoring) =>
+        Card(publicBaseUri, catalog, queryAuthoring);
 
-    private static Dictionary<string, object> Card(Uri publicBaseUri, SafeCatalog catalog) => new()
+    private static Dictionary<string, object> Card(Uri publicBaseUri, SafeCatalog catalog, bool queryAuthoring) => new()
     {
         ["name"] = "Drasi Sentinel",
-        ["description"] = ConsumerContract,
+        ["description"] = queryAuthoring ? ConsumerContract + "\n\n" + AuthoringContract : ConsumerContract,
         ["version"] = "0.1.0",
         ["protocolVersion"] = "1.0",
         ["supportedInterfaces"] = new[]
@@ -53,16 +55,30 @@ public static class AgentCard
         ["capabilities"] = new { streaming = true, pushNotifications = false },
         ["defaultInputModes"] = new[] { "text/plain" },
         ["defaultOutputModes"] = new[] { "text/plain", "application/json" },
-        ["skills"] = Skills(catalog),
+        ["skills"] = Skills(catalog, queryAuthoring),
     };
 
-    private static object[] Skills(SafeCatalog catalog)
+    private static object[] Skills(SafeCatalog catalog, bool queryAuthoring)
     {
         var skills = catalog.Queries.Values
             .OrderBy(query => query.Id.Value, StringComparer.Ordinal)
             .Select(QuerySkill)
             .Cast<object>()
             .ToList();
+        if (queryAuthoring)
+        {
+            skills.Add(new
+            {
+                id = "author-continuous-query",
+                name = "Author continuous query",
+                description = AuthoringSkillDescription,
+                tags = new[] { "continuous-query", "authoring" },
+                examples = new[] { "Tell me when rows match the condition I describe." },
+                inputModes = new[] { "text/plain" },
+                outputModes = new[] { "text/plain", "application/json" },
+            });
+        }
+
         skills.Add(new
         {
             id = "current-task-results",
@@ -97,6 +113,12 @@ public static class AgentCard
         "A status-update is not a change. An artifact-update is an output. A change is a part whose kind is data and whose data.type is native_query_diff. diffType Add means the row entered the result set. diffType Update means a row still in the set changed. diffType Delete means the row left the result set. data is the row when present. before and after are present only when the host supplied them. Do not send another request to fill a missing field. Text parts are status, not changes.\n\n" +
         "If the stream drops, POST method tasks/subscribe with the same taskId. Set the Last-Event-ID header to the last SSE id you applied. Events after that id are replayed, then the stream waits. Omit the header only to replay from the start.\n\n" +
         "To read current rows, POST message/stream on the same taskId with a new messageId and the current-task-results example as the only text part. The output is an artifact-update data part whose type is current_query_results. It contains rows. It does not replace later native_query_diff events.";
+
+    private const string AuthoringContract =
+        "If no continuous-query skill matches the change you want, describe that change in plain language as the whole user text on a new task. Do not send Cypher, a source name, a filter, or a destination. The agent builds one query against the configured sources and opens one watch on that task.";
+
+    private const string AuthoringSkillDescription =
+        "This is a change watch for a condition that is not already a skill. Describe the change in plain language. The agent builds one query against the configured sources and opens one task. Do not send Cypher, a source name, a filter, or a destination. Follow the card description.";
 
     private const string WatchNotice =
         "This is a change watch, not a one-shot answer. Sending an example opens one task. Later changes arrive on that task as JSON artifacts. Follow the card description.";

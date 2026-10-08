@@ -17,6 +17,12 @@ In Inspector send a message and ask:
 Tell me when an invoice is paid.
 ```
 
+The manifest sets `service.query_authoring.enabled` to true, so a description
+that does not match that skill can become a new query against the configured
+source. The agent reads the schema, samples real values, tests the query, and
+can diagnose the source or query before it opens one watch. It does not see
+the database password, and it cannot add a source or insert rows.
+
 The card exposes standard JSON-RPC/SSE. After the card connects, click
 **Send streaming** to send this message with standard A2A
 `SendStreamingMessage`. Inspector renders each task-status and artifact

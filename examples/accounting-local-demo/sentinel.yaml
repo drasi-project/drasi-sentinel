@@ -11,6 +11,8 @@ service:
       mode: anonymous
   webhook:
     url: http://127.0.0.1:8082/
+  query_authoring:
+    enabled: true
 sources:
   - id: accounting-ledger
     kind: postgres

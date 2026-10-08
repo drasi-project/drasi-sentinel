@@ -15,17 +15,22 @@ internal sealed class SessionFunction : AIFunction
     {
         _tools = tools;
         _tool = tool;
+        var properties = new JsonObject();
+        var required = new JsonArray();
+        foreach (var argument in tool.Arguments)
+        {
+            properties[argument.Name] = new JsonObject { ["type"] = "string" };
+            if (argument.Required)
+                required.Add(argument.Name);
+        }
+
         var schema = new JsonObject
         {
             ["type"] = "object",
-            ["properties"] = new JsonObject(),
+            ["properties"] = properties,
         };
-        if (tool.ArgumentName is { } argument)
-        {
-            schema["properties"]![argument] = new JsonObject { ["type"] = "string" };
-            schema["required"] = new JsonArray(argument);
-        }
-
+        if (required.Count > 0)
+            schema["required"] = required;
         _schema = JsonSerializer.SerializeToElement(schema);
     }
 
@@ -40,12 +45,26 @@ internal sealed class SessionFunction : AIFunction
         CancellationToken cancellationToken)
     {
         IReadOnlyDictionary<string, string?>? values = null;
-        if (_tool.ArgumentName is { } argument)
+        if (_tool.Arguments.Count > 0)
         {
-            arguments.TryGetValue(argument, out var raw);
-            values = new Dictionary<string, string?> { [argument] = raw?.ToString() };
+            var provided = new Dictionary<string, string?>();
+            foreach (var argument in _tool.Arguments)
+            {
+                if (!arguments.TryGetValue(argument.Name, out var raw) || raw is null)
+                    continue;
+                provided[argument.Name] = Text(raw);
+            }
+
+            values = provided;
         }
 
         return await _tools.InvokeAsync(_tool.Name, values);
     }
+
+    private static string Text(object raw) => raw switch
+    {
+        JsonElement { ValueKind: JsonValueKind.String } element => element.GetString() ?? "",
+        JsonElement element => element.GetRawText(),
+        _ => raw.ToString() ?? "",
+    };
 }

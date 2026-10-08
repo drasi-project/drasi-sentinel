@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Drasi.Sentinel.Domain;
 using Npgsql;
 
@@ -172,7 +173,7 @@ public sealed class InMemorySentinelRepository : IConversationRepository
     private SemaphoreSlim Gate(ConversationTaskId taskId) => _gates.GetOrAdd(taskId, static _ => new(1, 1));
 }
 
-public sealed class PostgresSentinelRepository : IConversationRepository, IAsyncDisposable
+public sealed class PostgresSentinelRepository : IConversationRepository, IAuthoredQueryStore, IAsyncDisposable
 {
     private const string MigrationSql = """
         DROP TABLE IF EXISTS sentinel_outbound_intents;
@@ -196,6 +197,13 @@ public sealed class PostgresSentinelRepository : IConversationRepository, IAsync
         ALTER TABLE sentinel_task_events DROP CONSTRAINT IF EXISTS sentinel_task_events_owner_id_task_id_deduplication_key_key;
         ALTER TABLE sentinel_task_events DROP COLUMN IF EXISTS deduplication_key;
         ALTER TABLE sentinel_subscriptions DROP COLUMN IF EXISTS filters;
+        CREATE TABLE IF NOT EXISTS sentinel_authored_queries (
+            query_id text PRIMARY KEY,
+            description text NOT NULL,
+            cypher text NOT NULL,
+            source_ids text NOT NULL,
+            joins text NOT NULL,
+            created_at timestamptz NOT NULL);
         """;
     private readonly NpgsqlDataSource _dataSource;
     private readonly bool _ownsDataSource;
@@ -305,7 +313,94 @@ public sealed class PostgresSentinelRepository : IConversationRepository, IAsync
         await GetOrCreateTaskAsync(principal, taskId, cancellationToken);
         await AppendEventAsync(principal.Owner, new(taskId, default, ConversationEventKind.AssistantArtifact, null, content, DateTimeOffset.UtcNow), cancellationToken);
     }
+    public async Task<IReadOnlyList<AuthoredQuery>> ListAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("SELECT query_id, description, cypher, source_ids, joins FROM sentinel_authored_queries ORDER BY query_id", connection);
+        var result = new List<AuthoredQuery>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            result.Add(ReadAuthored(reader));
+        return result;
+    }
+
+    public async Task<AuthoredQuery?> FindAsync(QueryId id, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("SELECT query_id, description, cypher, source_ids, joins FROM sentinel_authored_queries WHERE query_id=@id", connection);
+        command.Parameters.AddWithValue("id", id.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadAuthored(reader) : null;
+    }
+
+    public async Task SaveAsync(AuthoredQuery query, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO sentinel_authored_queries (query_id, description, cypher, source_ids, joins, created_at)
+            VALUES (@id, @description, @cypher, @sources, @joins, now())
+            ON CONFLICT (query_id) DO NOTHING;
+            """, connection);
+        command.Parameters.AddWithValue("id", query.Id.Value);
+        command.Parameters.AddWithValue("description", query.Description);
+        command.Parameters.AddWithValue("cypher", query.Cypher);
+        command.Parameters.AddWithValue("sources", JsonSerializer.Serialize(query.SourceIds));
+        command.Parameters.AddWithValue("joins", JsonSerializer.Serialize(query.Joins));
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            throw new SentinelException("query_exists", $"Query '{query.Id.Value}' already exists.");
+    }
+
+    public async Task ReplaceAsync(AuthoredQuery query, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("""
+            UPDATE sentinel_authored_queries
+            SET description=@description, cypher=@cypher, source_ids=@sources, joins=@joins
+            WHERE query_id=@id;
+            """, connection);
+        command.Parameters.AddWithValue("id", query.Id.Value);
+        command.Parameters.AddWithValue("description", query.Description);
+        command.Parameters.AddWithValue("cypher", query.Cypher);
+        command.Parameters.AddWithValue("sources", JsonSerializer.Serialize(query.SourceIds));
+        command.Parameters.AddWithValue("joins", JsonSerializer.Serialize(query.Joins));
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+            throw new SentinelException("query_unknown", $"Query '{query.Id.Value}' does not exist.");
+    }
+
+    public async Task DeleteAsync(QueryId id, CancellationToken cancellationToken)
+    {
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var command = new NpgsqlCommand("DELETE FROM sentinel_authored_queries WHERE query_id=@id", connection);
+        command.Parameters.AddWithValue("id", id.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async ValueTask DisposeAsync() { if (_ownsDataSource) await _dataSource.DisposeAsync(); }
+
+    private static AuthoredQuery ReadAuthored(NpgsqlDataReader reader)
+    {
+        var joins = JsonSerializer.Deserialize<StoredJoin[]>(reader.GetString(4)) ?? [];
+        return new(
+            new(reader.GetString(0)),
+            reader.GetString(1),
+            reader.GetString(2),
+            JsonSerializer.Deserialize<string[]>(reader.GetString(3)) ?? [],
+            joins.Select(join => new QueryJoinSpec(
+                join.Id,
+                join.Keys.Select(key => new QueryJoinKeySpec(key.Label, key.Property)).ToArray())).ToArray());
+    }
+
+    private sealed class StoredJoin
+    {
+        public string Id { get; set; } = "";
+        public List<StoredJoinKey> Keys { get; set; } = [];
+    }
+
+    private sealed class StoredJoinKey
+    {
+        public string Label { get; set; } = "";
+        public string Property { get; set; } = "";
+    }
 
     private const string SubscriptionSelect = "SELECT subscription_id,task_id,tenant_id,owner_id,query_id,reaction_id,request_key,state,native_subscription_id,created_at FROM sentinel_subscriptions";
     private static NpgsqlCommand SubscriptionCommand(NpgsqlConnection c, string where, OwnerId owner, ConversationTaskId task) { var x = new NpgsqlCommand(SubscriptionSelect + " WHERE " + where + " ORDER BY created_at", c); x.Parameters.AddWithValue("owner", owner.Value); x.Parameters.AddWithValue("task", task.Value); return x; }
