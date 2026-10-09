@@ -35,11 +35,11 @@ and append-only task events. Every native query diff appends an A2A JSON data
 artifact to that journal. If `service.webhook.url` is set, the same JSON is
 also posted to that URL after the journal write. Each artifact retains the native diff type, raw JSON
 data, before/after values, grouping keys, and metadata when supplied, alongside
-its subscription, query, reaction, and occurrence time.
+its subscription, query, reaction, and occurrence time. `queryDescription` is the catalog description of that query.
 
 Current-result requests append a `current_query_results` A2A JSON data artifact
-to the same task journal. It contains `taskId`, `subscriptionId`, `queryId`, and
-the native query `rows`.
+to the same task journal. It contains `taskId`, `subscriptionId`, `queryId`,
+`queryDescription`, and the native query `rows`.
 
 ## Manifest
 

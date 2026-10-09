@@ -11,6 +11,7 @@ readonly INSPECTOR_RUNNER="$INSPECTOR_DIR/scripts/run.sh"
 readonly CONTAINER_NAME="drasi-sentinel-curbside-local-demo"
 readonly MYSQL_CONTAINER="drasi-sentinel-curbside-mysql"
 readonly HOST_LOG="$EXAMPLE_DIR/secrets/host.log"
+readonly INSPECTOR_LOG="$EXAMPLE_DIR/secrets/inspector.log"
 readonly SENTINEL_CONNECTION="$EXAMPLE_DIR/secrets/sentinel-connection.txt"
 readonly INSPECTOR_PORT=8083
 
@@ -28,6 +29,70 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
     listener.bind(("127.0.0.1", 0))
     print(listener.getsockname()[1])
 PY
+}
+
+listener_on() {
+	command -v lsof >/dev/null 2>&1 || return 0
+	lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1 || true
+}
+
+dump_log() {
+	printf '\n--- %s ---\n' "$1" >&2
+	if [[ -f "$1" ]]; then
+		tail -n 40 "$1" >&2
+	else
+		printf 'missing\n' >&2
+	fi
+}
+
+show_new_lines() {
+	local log="$1"
+	local prefix="$2"
+	local seen_name="$3"
+	local lines seen
+	[[ -f "$log" ]] || return 0
+	lines="$(wc -l <"$log" | tr -d '[:space:]')"
+	seen="${!seen_name}"
+	[[ "$lines" -gt "$seen" ]] || return 0
+	tail -n +"$((seen + 1))" "$log" | sed "s/^/[$prefix] /" >&2
+	printf -v "$seen_name" '%s' "$lines"
+}
+
+wait_for_url() {
+	local url="$1"
+	local pid="$2"
+	local log="$3"
+	local prefix="$4"
+	local seen_name="$5"
+	local seconds="$6"
+	local started=$SECONDS
+	local last_note=$SECONDS
+	printf 'Waiting for %s at %s (pid %s). Log: %s\n' "$prefix" "$url" "$pid" "$log" >&2
+	while (( SECONDS - started < seconds )); do
+		show_new_lines "$log" "$prefix" "$seen_name"
+		if ! kill -0 "$pid" >/dev/null 2>&1; then
+			printf '%s process %s exited before %s responded.\n' "$prefix" "$pid" "$url" >&2
+			dump_log "$log"
+			exit 1
+		fi
+		if [[ "$prefix" == "Inspector" && -f "$log" ]] && grep -E 'Address already in use|died unexpectedly' "$log" >/dev/null; then
+			printf 'Inspector failed while starting. The UI process can stay alive after the backend dies.\n' >&2
+			dump_log "$log"
+			exit 1
+		fi
+		if curl --silent --fail --max-time 2 --connect-timeout 1 "$url" >/dev/null; then
+			printf '%s is up: %s\n' "$prefix" "$url" >&2
+			return 0
+		fi
+		if (( SECONDS - last_note >= 5 )); then
+			printf 'Still waiting for %s (%ss). New %s log lines are printed as they arrive.\n' "$url" "$((SECONDS - started))" "$log" >&2
+			last_note=$SECONDS
+		fi
+		sleep 1
+	done
+	printf 'Timed out after %ss waiting for %s.\n' "$seconds" "$url" >&2
+	dump_log "$log"
+	exit 1
 }
 
 stop_tree() {
@@ -86,12 +151,27 @@ fi
 	exit 2
 }
 
+inspector_holder="$(listener_on "$INSPECTOR_PORT")"
+if [[ -n "$inspector_holder" ]]; then
+	printf 'Inspector port %s is already taken by PID %s.\n' "$INSPECTOR_PORT" "$inspector_holder" >&2
+	ps -p "$inspector_holder" -o pid=,etime=,command= >&2 || true
+	printf 'That listener is not this demo. Stop it, then run ./demo.sh again.\n' >&2
+	exit 1
+fi
+
 trap cleanup EXIT INT TERM
 printf 'Preparing local PostgreSQL and MySQL.\n'
 "$BOOTSTRAP" start >/dev/null
-printf 'Starting Sentinel and A2A Inspector. Plugin refs in sentinel.yaml are installed on startup.\n'
-rm -f "$SENTINEL_CONNECTION"
 host_url="http://127.0.0.1:$(choose_port)"
+printf 'Starting Sentinel at %s\n' "$host_url"
+printf 'Host log: %s\n' "$HOST_LOG"
+printf 'Starting A2A Inspector at http://127.0.0.1:%s/\n' "$INSPECTOR_PORT"
+printf 'Inspector log: %s\n' "$INSPECTOR_LOG"
+rm -f "$SENTINEL_CONNECTION"
+: >"$HOST_LOG"
+: >"$INSPECTOR_LOG"
+host_log_lines=0
+inspector_log_lines=0
 (
 	cd "$EXAMPLE_DIR"
 	exec env ASPNETCORE_URLS="$host_url" dotnet run --no-launch-profile --project "$HOST_PROJECT" -- "$MANIFEST"
@@ -101,15 +181,10 @@ host_pid=$!
 (
 	cd "$INSPECTOR_DIR"
 	exec env A2A_INSPECTOR_PORT="$INSPECTOR_PORT" bash "$INSPECTOR_RUNNER"
-) >"$EXAMPLE_DIR/secrets/inspector.log" 2>&1 &
+) >"$INSPECTOR_LOG" 2>&1 &
 inspector_pid=$!
 
-for _ in {1..180}; do
-	curl --silent --fail "$host_url/healthz" >/dev/null && break
-	kill -0 "$host_pid" >/dev/null 2>&1 || { cat "$HOST_LOG" >&2; exit 1; }
-	sleep 1
-done
-curl --silent --fail "$host_url/healthz" >/dev/null || { cat "$HOST_LOG" >&2; exit 1; }
+wait_for_url "$host_url/healthz" "$host_pid" "$HOST_LOG" "Sentinel" host_log_lines 180
 
 (
 	umask 077
@@ -118,18 +193,7 @@ curl --silent --fail "$host_url/healthz" >/dev/null || { cat "$HOST_LOG" >&2; ex
 )
 chmod 600 "$SENTINEL_CONNECTION"
 
-for _ in {1..90}; do
-	curl --silent --fail "http://127.0.0.1:$INSPECTOR_PORT/" >/dev/null && break
-	kill -0 "$inspector_pid" >/dev/null 2>&1 || {
-		cat "$EXAMPLE_DIR/secrets/inspector.log" >&2
-		exit 1
-	}
-	sleep 1
-done
-curl --silent --fail "http://127.0.0.1:$INSPECTOR_PORT/" >/dev/null || {
-	cat "$EXAMPLE_DIR/secrets/inspector.log" >&2
-	exit 1
-}
+wait_for_url "http://127.0.0.1:$INSPECTOR_PORT/" "$inspector_pid" "$INSPECTOR_LOG" "Inspector" inspector_log_lines 90
 
 cat <<EOF
 Connect A2A Inspector to:

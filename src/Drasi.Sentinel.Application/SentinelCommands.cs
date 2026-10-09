@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Drasi;
 using Drasi.Sentinel.Domain;
 
@@ -16,7 +17,8 @@ public sealed record CurrentTaskResultsArtifact(
     string TaskId,
     string SubscriptionId,
     string QueryId,
-    IReadOnlyList<JsonNode> Rows);
+    IReadOnlyList<JsonNode> Rows,
+    string? QueryDescription = null);
 public sealed record ToolResult(
     string Kind,
     ConversationSubscription? Subscription = null,
@@ -171,7 +173,10 @@ public sealed class ConversationSubscriptions(
     ITaskEventNotifier notifier,
     TimeProvider timeProvider) : IConversationSubscriptions
 {
-    private static readonly JsonSerializerOptions ArtifactJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions ArtifactJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _activation = new();
 
     public async Task<ToolResult> InvokeAsync(Principal principal, TaskTurnId turn, GovernedToolCall call, CancellationToken cancellationToken) =>
@@ -269,12 +274,14 @@ public sealed class ConversationSubscriptions(
         var subscription = (await repository.ListSubscriptionsAsync(principal.Owner, taskId, cancellationToken)).SingleOrDefault()
             ?? throw new SentinelException("subscription_not_found", "The task does not have a subscription.");
         var rows = await engine.GetQueryResultsAsync(subscription.Request.QueryId, cancellationToken);
+        catalog.Queries.TryGetValue(subscription.Request.QueryId, out var query);
         var artifact = new CurrentTaskResultsArtifact(
             "current_query_results",
             taskId.Value,
             subscription.Id.Value.ToString(),
             subscription.Request.QueryId.Value,
-            rows);
+            rows,
+            query?.Description);
         await AppendAsync(
             principal.Owner,
             taskId,

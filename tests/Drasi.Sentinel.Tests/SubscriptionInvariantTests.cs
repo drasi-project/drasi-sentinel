@@ -213,7 +213,7 @@ public sealed class SubscriptionInvariantTests
     {
         var (service, repository, principal) = await CreateAsync();
         var subscription = await Subscribe(service, principal, "task", "message", "request");
-        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
+        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System, catalog: Catalog());
         foreach (var diff in new[]
         {
             Diff("Add", "entity-200", "one"),
@@ -235,6 +235,7 @@ public sealed class SubscriptionInvariantTests
         Assert.Equal("native_query_diff", artifact.RootElement.GetProperty("type").GetString());
         Assert.Equal(subscription.Id.Value, artifact.RootElement.GetProperty("subscriptionId").GetGuid());
         Assert.Equal("query", artifact.RootElement.GetProperty("queryId").GetString());
+        Assert.Equal("Reports configured changes.", artifact.RootElement.GetProperty("queryDescription").GetString());
         Assert.Equal("reaction", artifact.RootElement.GetProperty("reactionId").GetString());
         Assert.Equal(JsonValueKind.String, artifact.RootElement.GetProperty("occurredAt").ValueKind);
         Assert.Equal("Update", artifact.RootElement.GetProperty("diffType").GetString());

@@ -21,7 +21,8 @@ public sealed class NativeResultIngestion(
     IConversationRepository repository,
     ITaskEventNotifier notifier,
     TimeProvider timeProvider,
-    IArtifactWebhook? webhook = null) : INativeResultIngestion
+    IArtifactWebhook? webhook = null,
+    SafeCatalog? catalog = null) : INativeResultIngestion
 {
     private static readonly JsonSerializerOptions ArtifactJsonOptions = new()
     {
@@ -60,6 +61,9 @@ public sealed class NativeResultIngestion(
             return;
 
         var occurredAt = timeProvider.GetUtcNow();
+        string? queryDescription = null;
+        if (catalog?.Queries.TryGetValue(subscription.Request.QueryId, out var query) == true)
+            queryDescription = query.Description;
         var persisted = await repository.AppendEventAsync(
             subscription.Owner,
             new ConversationEvent(
@@ -72,6 +76,7 @@ public sealed class NativeResultIngestion(
                     type = "native_query_diff",
                     subscriptionId = subscription.Id.Value,
                     queryId = subscription.Request.QueryId.Value,
+                    queryDescription,
                     reactionId = subscription.Request.ReactionId.Value,
                     occurredAt,
                     diffType = diff.Type,

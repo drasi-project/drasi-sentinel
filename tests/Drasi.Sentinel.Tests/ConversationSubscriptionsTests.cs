@@ -75,9 +75,12 @@ public sealed class ConversationSubscriptionsTests
         Assert.Equal("task-1", artifact.TaskId);
         Assert.Equal(created.Subscription!.Id.Value.ToString(), artifact.SubscriptionId);
         Assert.Equal("query", artifact.QueryId);
+        Assert.Equal("Reports configured changes.", artifact.QueryDescription);
         Assert.Equal("row-1", artifact.Rows.Single().AsObject()["id"]!.GetValue<string>());
         var events = await service.ReadEventsAsync(principal, new("task-1"), new(0), 100, CancellationToken.None);
-        Assert.Equal("current_query_results", JsonNode.Parse(events.Last().Content)!.AsObject()["type"]!.GetValue<string>());
+        var current = JsonNode.Parse(events.Last().Content)!.AsObject();
+        Assert.Equal("current_query_results", current["type"]!.GetValue<string>());
+        Assert.Equal("Reports configured changes.", current["queryDescription"]!.GetValue<string>());
     }
 
     [Fact]

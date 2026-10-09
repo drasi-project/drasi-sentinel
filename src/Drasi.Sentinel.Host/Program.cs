@@ -28,7 +28,8 @@ builder.Services.AddSingleton(services => new NativeResultIngestion(
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
     TimeProvider.System,
-    services.GetService<IArtifactWebhook>()));
+    services.GetService<IArtifactWebhook>(),
+    liveCatalog.Catalog));
 builder.Services.AddSingleton<INativeResultIngestion>(services =>
     services.GetRequiredService<NativeResultIngestion>());
 builder.Services.AddSingleton(manifest.A2aAuthentication);
