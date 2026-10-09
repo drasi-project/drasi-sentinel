@@ -645,9 +645,10 @@ public sealed class QueryAuthoring(
             samples[label] = await SampleLabelAsync(label, sources, cancellationToken);
         }
 
+        var labels = samples.Keys.ToArray();
         foreach (var example in samples.Values.SelectMany(properties => properties.Values).SelectMany(values => values).Distinct(StringComparer.Ordinal))
         {
-            if (NamesStoredValue(callerText, example) && !query.Contains($"'{example}'", StringComparison.Ordinal))
+            if (NamesStoredValue(callerText, example, labels) && !query.Contains($"'{example}'", StringComparison.Ordinal))
                 named.Add(example);
         }
 
@@ -668,8 +669,17 @@ public sealed class QueryAuthoring(
             && !Regex.IsMatch(projection, @"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b");
         if (aggregatedOnly)
             return null;
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match match in VariableLabel.Matches(query))
+            variables[match.Groups["variable"].Value] = match.Groups["label"].Value;
+        var returned = variables
+            .Where(pair => Regex.IsMatch(projection, $@"\b{Regex.Escape(pair.Key)}\s*\.", RegexOptions.CultureInvariant))
+            .Select(pair => pair.Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var labels = returned.Length == 0 ? QueryText.NodeLabels(query) : returned;
         var missing = new List<string>();
-        foreach (var label in QueryText.NodeLabels(query))
+        foreach (var label in labels)
         {
             var node = graph.Nodes.FirstOrDefault(item => item.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
             if (node is null)
@@ -689,7 +699,7 @@ public sealed class QueryAuthoring(
     private static string? AggregationOnly(string query, string? callerText)
     {
         if (string.IsNullOrWhiteSpace(callerText) ||
-            Regex.IsMatch(callerText, @"\b(count|how many|number of|total)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            Regex.IsMatch(callerText, @"\b(count|how many|number of|total|average|avg|mean|minimum|maximum)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return null;
         var returns = Regex.Match(query, @"\bRETURN\b(?<projection>.+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!returns.Success)
@@ -702,7 +712,7 @@ public sealed class QueryAuthoring(
             : null;
     }
 
-    private static bool NamesStoredValue(string? text, string example)
+    private static bool NamesStoredValue(string? text, string example, IReadOnlyCollection<string> labels)
     {
         if (string.IsNullOrWhiteSpace(text))
             return false;
@@ -710,7 +720,24 @@ public sealed class QueryAuthoring(
             return true;
         foreach (Match word in Regex.Matches(text, @"\b[A-Za-z][A-Za-z0-9]{3,}\b"))
         {
+            if (IsLabelWord(word.Value, labels))
+                continue;
             if (example.StartsWith(word.Value, StringComparison.OrdinalIgnoreCase) && example.Length > word.Value.Length)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsLabelWord(string word, IReadOnlyCollection<string> labels)
+    {
+        foreach (var label in labels)
+        {
+            if (label.Equals(word, StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (word.EndsWith('s') && label.Equals(word[..^1], StringComparison.OrdinalIgnoreCase))
+                return true;
+            if (label.Equals(word + "s", StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 

@@ -65,8 +65,10 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
     public Dictionary<string, JsonNode?> Schemas { get; } = new(StringComparer.Ordinal);
     public bool FailCombinedProbes { get; set; }
 
+    public SourceGraph? Graph { get; set; }
+
     public Task<SourceGraph> DescribeAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(QueryAuthoringEvalSupport.Graph());
+        Task.FromResult(Graph ?? QueryAuthoringEvalSupport.Graph());
 
     public Task<QueryProbe> ProbeAsync(
         string cypher,

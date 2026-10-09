@@ -1,0 +1,65 @@
+agent:
+  url: { env: AZURE_OPENAI_ENDPOINT }
+  model: { env: AZURE_OPENAI_MODEL }
+plugins:
+  - ref: source/postgres
+  - ref: bootstrap/postgres
+  - ref: secret-store/file
+secretStore:
+  kind: file
+  path: secrets/secrets.json
+service:
+  profile: demo
+  database:
+    kind: Secret
+    name: sentinel-connection-string
+  a2a:
+    authentication:
+      mode: anonymous
+  query_authoring:
+    enabled: true
+sources:
+  - id: building-facilities
+    kind: postgres
+    config:
+      host: 127.0.0.1
+      port: 5732
+      database: building_comfort
+      user: sentinel
+      password:
+        kind: Secret
+        name: postgres-password
+      tables: [Building, Floor, Room]
+      slotName: drasi_building_comfort_slot
+      publicationName: drasi_building_comfort_pub
+      sslMode: disable
+      tableKeys:
+        - table: Building
+          keyColumns: [id]
+        - table: Floor
+          keyColumns: [id]
+        - table: Room
+          keyColumns: [id]
+    bootstrap:
+      kind: postgres
+      host: 127.0.0.1
+      port: 5732
+      database: building_comfort
+      user: sentinel
+      password:
+        kind: Secret
+        name: postgres-password
+      tables: [Building, Floor, Room]
+      slotName: drasi_building_comfort_slot
+      publicationName: drasi_building_comfort_pub
+      sslMode: disable
+      tableKeys:
+        - table: Building
+          keyColumns: [id]
+        - table: Floor
+          keyColumns: [id]
+        - table: Room
+          keyColumns: [id]
+queries: []
+reactions:
+  - id: notify-building-staff

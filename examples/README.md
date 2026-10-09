@@ -15,6 +15,9 @@ provide query, source, Cypher, or filter identifiers.
   PostgreSQL orders source, a MySQL vehicles source, and no queries. The agent
   builds the watches. Plugin refs are declared in `sentinel.yaml` and installed
   on startup.
+- [Local building comfort demonstration](building-comfort-local-demo/README.md)
+  starts the PostgreSQL building, floor, and room source from the Drasi
+  building comfort tutorial, and no queries. The agent builds the watches.
 
 Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` before running a host.
 The local accounting and curbside demos write owner-only `secrets/secrets.json`
