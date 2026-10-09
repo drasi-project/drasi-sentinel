@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Drasi.Sentinel.Application;
@@ -33,7 +34,9 @@ public sealed class SentinelManifest
         string databaseConnectionString,
         string directory,
         Uri? webhookUrl,
-        bool queryAuthoringEnabled)
+        bool queryAuthoringEnabled,
+        IReadOnlyList<string> plugins,
+        SecretStoreManifest? secretStore)
     {
         Agent = agent;
         Profile = profile;
@@ -44,6 +47,8 @@ public sealed class SentinelManifest
         Directory = directory;
         WebhookUrl = webhookUrl;
         QueryAuthoringEnabled = queryAuthoringEnabled;
+        Plugins = plugins;
+        SecretStore = secretStore;
     }
 
     public AgentManifest? Agent { get; }
@@ -52,6 +57,8 @@ public sealed class SentinelManifest
     public SafeCatalog SafeCatalog { get; }
     public Uri? WebhookUrl { get; }
     public bool QueryAuthoringEnabled { get; }
+    public IReadOnlyList<string> Plugins { get; }
+    internal SecretStoreManifest? SecretStore { get; }
     internal ExecutableCatalog ExecutableCatalog { get; }
     internal string DatabaseConnectionString { get; }
     internal string Directory { get; }
@@ -69,6 +76,7 @@ internal sealed record ExecutableQuery(QueryId Id, string Cypher, IReadOnlyList<
 internal sealed record ExecutableCatalog(
     IReadOnlyDictionary<string, ExecutableSource> Sources,
     IReadOnlyDictionary<QueryId, ExecutableQuery> Queries);
+internal sealed record SecretStoreManifest(string Kind, JsonObject Configuration);
 
 public static class SentinelManifestLoader
 {
@@ -94,16 +102,18 @@ public static class SentinelManifestLoader
         RejectDuplicateKeys(yaml);
         var document = ParseSingleDocument(yaml);
         var root = RequireMapping(document.RootNode, "manifest");
-        RequireOnlyKeys(root, "manifest", "agent", "service", "sources", "queries", "reactions");
+        RequireOnlyKeys(root, "manifest", "agent", "service", "plugins", "secretStore", "sources", "queries", "reactions");
         RejectUnexpectedEnvironmentReferences(root, "manifest", skipAgentReferences: true);
 
+        var plugins = ReadPlugins(root);
+        var secretStore = ReadSecretStore(root, manifestPath, plugins);
         var agent = ReadAgent(root);
         var service = RequireMapping(Required(root, "service", "manifest"), "service");
         var profile = ReadProfile(service);
         var webhookUrl = ReadWebhook(service);
         var queryAuthoringEnabled = ReadQueryAuthoring(service);
-        var databaseConnectionString = ReadDatabaseConnectionString(service, manifestPath);
-        var a2aAuthentication = ReadA2aAuthentication(service, profile, manifestPath);
+        var databaseConnectionString = ReadDatabaseConnectionString(service, secretStore);
+        var a2aAuthentication = ReadA2aAuthentication(service, profile, secretStore);
         var sources = ReadEntries(root, "sources")
             .Select(entry => ReadSource(entry, manifestPath))
             .ToDictionary(source => source.Id, StringComparer.Ordinal);
@@ -131,6 +141,14 @@ public static class SentinelManifestLoader
             });
         if (queryAuthoringEnabled && reactions.Count != 1)
             throw new ManifestLoadException("service.query_authoring.enabled requires exactly one reaction.");
+        if (sources.Count > 0 && plugins.Count == 0)
+            throw new ManifestLoadException("plugins must list the source and bootstrap plugins to install.");
+        foreach (var source in sources.Values)
+        {
+            RequireSecretReferences(source.Configuration, $"sources.{source.Id}.config", secretStore);
+            if (source.Bootstrap is not null)
+                RequireSecretReferences(source.Bootstrap, $"sources.{source.Id}.bootstrap", secretStore);
+        }
 
         return new SentinelManifest(
             agent,
@@ -146,7 +164,35 @@ public static class SentinelManifestLoader
             Path.GetDirectoryName(Path.GetFullPath(manifestPath))
                 ?? throw new ManifestLoadException("The manifest path has no parent directory."),
             webhookUrl,
-            queryAuthoringEnabled);
+            queryAuthoringEnabled,
+            plugins,
+            secretStore?.Manifest);
+    }
+
+    private static IReadOnlyList<string> ReadPlugins(YamlMappingNode root)
+    {
+        if (!root.Children.TryGetValue(new YamlScalarNode("plugins"), out var node))
+            return [];
+        if (node is not YamlSequenceNode sequence)
+            throw new ManifestLoadException("plugins must be a list of ref entries.");
+
+        var references = new List<string>();
+        var index = 0;
+        foreach (var item in sequence)
+        {
+            var path = $"plugins[{index}]";
+            var mapping = RequireMapping(item, path);
+            RequireOnlyKeys(mapping, path, "ref");
+            var reference = RequiredScalar(mapping, "ref", path).Trim();
+            if (reference.Length == 0)
+                throw new ManifestLoadException($"{path}.ref must not be empty.");
+            if (references.Contains(reference, StringComparer.Ordinal))
+                throw new ManifestLoadException($"Duplicate plugin ref '{reference}' is not allowed.");
+            references.Add(reference);
+            index++;
+        }
+
+        return references;
     }
 
     private static bool IsYamlPath(string path) =>
@@ -205,62 +251,19 @@ public static class SentinelManifestLoader
         string path,
         string manifestPath)
     {
+        if (TryScalar(mapping, "kind", out var kind) && StringComparer.Ordinal.Equals(kind, "file"))
+        {
+            throw new ManifestLoadException(
+                $"{path}.kind 'file' is not a Drasi config value. Use a plain value, ${{VAR}}, kind: Secret, or kind: EnvironmentVariable.");
+        }
+
         var result = new JsonObject();
         foreach (var pair in mapping.Children)
         {
             var key = ScalarKey(pair.Key, path);
-            result[key] = StringComparer.Ordinal.Equals(key, "password") &&
-                          pair.Value is YamlMappingNode passwordReference
-                ? ReadPluginPassword(passwordReference, $"{path}.password", manifestPath)
-                : StringComparer.Ordinal.Equals(key, "port") &&
-                  pair.Value is YamlMappingNode portReference
-                    ? ReadPluginPort(portReference, $"{path}.port", manifestPath)
-                : ReadPluginValue(pair.Value, $"{path}.{key}", manifestPath);
+            result[key] = ReadPluginValue(pair.Value, $"{path}.{key}", manifestPath);
         }
         return result;
-    }
-
-    private static string ReadPluginPassword(
-        YamlMappingNode reference,
-        string path,
-        string manifestPath)
-    {
-        RequireOnlyKeys(reference, path, "kind", "path");
-        if (!TryScalar(reference, "kind", out var kind) ||
-            !StringComparer.Ordinal.Equals(kind, "file"))
-        {
-            throw new ManifestLoadException($"{path}.kind must be 'file'.");
-        }
-
-        return ReadSecretFile(
-            RequiredScalar(reference, "path", path),
-            manifestPath,
-            "PostgreSQL source password");
-    }
-
-    private static long ReadPluginPort(
-        YamlMappingNode reference,
-        string path,
-        string manifestPath)
-    {
-        RequireOnlyKeys(reference, path, "kind", "path");
-        if (!TryScalar(reference, "kind", out var kind) ||
-            !StringComparer.Ordinal.Equals(kind, "file"))
-        {
-            throw new ManifestLoadException($"{path}.kind must be 'file'.");
-        }
-
-        var value = ReadSecretFile(
-            RequiredScalar(reference, "path", path),
-            manifestPath,
-            "PostgreSQL source port");
-        if (!long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port) ||
-            port is < 1 or > 65535)
-        {
-            throw new ManifestLoadException($"{path} must resolve to a TCP port between 1 and 65535.");
-        }
-
-        return port;
     }
 
     private static JsonNode? ReadPluginValue(YamlNode node, string path, string manifestPath) =>
@@ -444,25 +447,16 @@ public static class SentinelManifestLoader
         };
     }
 
-    private static string ReadDatabaseConnectionString(YamlMappingNode service, string manifestPath)
+    private static string ReadDatabaseConnectionString(YamlMappingNode service, LoadedSecretStore? secretStore)
     {
         var database = RequireMapping(Required(service, "database", "service"), "service.database");
-        RequireOnlyKeys(database, "service.database", "kind", "path");
-        if (!TryScalar(database, "kind", out var kind) || !StringComparer.Ordinal.Equals(kind, "file"))
-        {
-            throw new ManifestLoadException("service.database.kind must be 'file'.");
-        }
-
-        return ReadSecretFile(
-            RequiredScalar(database, "path", "service.database"),
-            manifestPath,
-            "database connection string");
+        return ReadHostConfigValue(database, "service.database", secretStore);
     }
 
     private static A2aAuthenticationManifest ReadA2aAuthentication(
         YamlMappingNode service,
         ServiceProfile profile,
-        string manifestPath)
+        LoadedSecretStore? secretStore)
     {
         var a2a = RequireMapping(Required(service, "a2a", "service"), "service.a2a");
         RequireOnlyKeys(a2a, "service.a2a", "authentication");
@@ -472,14 +466,14 @@ public static class SentinelManifestLoader
         var mode = RequiredScalar(authentication, "mode", "service.a2a.authentication");
         return mode switch
         {
-            "jwt" => ReadA2aJwt(authentication, manifestPath),
+            "jwt" => ReadA2aJwt(authentication, secretStore),
             "anonymous" => ReadA2aAnonymous(authentication, profile),
             _ => throw new ManifestLoadException(
                 "service.a2a.authentication.mode must be either 'jwt' or 'anonymous'."),
         };
     }
 
-    private static A2aJwtManifest ReadA2aJwt(YamlMappingNode authentication, string manifestPath)
+    private static A2aJwtManifest ReadA2aJwt(YamlMappingNode authentication, LoadedSecretStore? secretStore)
     {
         RequireOnlyKeys(
             authentication,
@@ -491,19 +485,10 @@ public static class SentinelManifestLoader
         var publicKey = RequireMapping(
             Required(authentication, "public_key", "service.a2a.authentication"),
             "service.a2a.authentication.public_key");
-        RequireOnlyKeys(publicKey, "service.a2a.authentication.public_key", "kind", "path");
-        if (!TryScalar(publicKey, "kind", out var kind) || !StringComparer.Ordinal.Equals(kind, "file"))
-        {
-            throw new ManifestLoadException("service.a2a.authentication.public_key.kind must be 'file'.");
-        }
-
         return new A2aJwtManifest(
             RequiredScalar(authentication, "issuer", "service.a2a.authentication"),
             RequiredScalar(authentication, "audience", "service.a2a.authentication"),
-            ReadSecretFile(
-                RequiredScalar(publicKey, "path", "service.a2a.authentication.public_key"),
-                manifestPath,
-                "A2A public key"));
+            ReadHostConfigValue(publicKey, "service.a2a.authentication.public_key", secretStore));
     }
 
     private static A2aAnonymousManifest ReadA2aAnonymous(
@@ -520,25 +505,174 @@ public static class SentinelManifestLoader
         return new A2aAnonymousManifest();
     }
 
-    private static string ReadSecretFile(string configuredPath, string manifestPath, string description)
-    {
-        var fullManifestPath = Path.GetFullPath(manifestPath);
-        var secretPath = Path.GetFullPath(
-            configuredPath,
-            Path.GetDirectoryName(fullManifestPath)
-            ?? throw new ManifestLoadException("The manifest path has no parent directory."));
+    private sealed record LoadedSecretStore(
+        SecretStoreManifest Manifest,
+        IReadOnlyDictionary<string, string>? FileSecrets);
 
-        EnsurePrivateRegularFile(secretPath, description);
+    private static LoadedSecretStore? ReadSecretStore(
+        YamlMappingNode root,
+        string manifestPath,
+        IReadOnlyList<string> plugins)
+    {
+        if (!root.Children.TryGetValue(new YamlScalarNode("secretStore"), out var node))
+            return null;
+
+        var mapping = RequireMapping(node, "secretStore");
+        var kind = RequiredScalar(mapping, "kind", "secretStore");
+        var reference = $"secret-store/{kind}";
+        if (!plugins.Contains(reference, StringComparer.Ordinal))
+        {
+            throw new ManifestLoadException(
+                $"plugins must include '{reference}' when secretStore.kind is '{kind}'.");
+        }
+
+        var configuration = new JsonObject();
+        foreach (var pair in mapping.Children)
+        {
+            var key = ScalarKey(pair.Key, "secretStore");
+            if (StringComparer.Ordinal.Equals(key, "kind"))
+                continue;
+            configuration[key] = ReadPluginValue(pair.Value, $"secretStore.{key}", manifestPath);
+        }
+
+        IReadOnlyDictionary<string, string>? fileSecrets = null;
+        if (StringComparer.Ordinal.Equals(kind, "file"))
+        {
+            if (configuration["path"] is not JsonValue pathValue ||
+                pathValue.GetValueKind() != JsonValueKind.String)
+            {
+                throw new ManifestLoadException("secretStore.path is required when secretStore.kind is file.");
+            }
+
+            var path = ResolveManifestPath(pathValue.GetValue<string>(), manifestPath);
+            EnsurePrivateRegularFile(path, "secret store");
+            configuration["path"] = path;
+            fileSecrets = ReadFileSecrets(path);
+        }
+
+        return new LoadedSecretStore(new SecretStoreManifest(kind, configuration), fileSecrets);
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadFileSecrets(string path)
+    {
+        string json;
         try
         {
-            return TrimOneTrailingNewline(File.ReadAllText(secretPath));
+            json = File.ReadAllText(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            throw new ManifestLoadException(
-                $"The {description} file '{secretPath}' could not be read.",
-                exception);
+            throw new ManifestLoadException($"The secret store file '{path}' could not be read.", exception);
         }
+
+        JsonNode? parsed;
+        try
+        {
+            parsed = JsonNode.Parse(json);
+        }
+        catch (JsonException exception)
+        {
+            throw new ManifestLoadException($"The secret store file '{path}' is not a JSON object.", exception);
+        }
+
+        if (parsed is not JsonObject secrets)
+            throw new ManifestLoadException($"The secret store file '{path}' must be a JSON object of strings.");
+
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var pair in secrets)
+        {
+            if (pair.Value is not JsonValue value || value.GetValueKind() != JsonValueKind.String)
+                throw new ManifestLoadException($"Secret '{pair.Key}' in '{path}' must be a string.");
+            result[pair.Key] = value.GetValue<string>();
+        }
+
+        return result;
+    }
+
+    private static string ReadHostConfigValue(
+        YamlMappingNode node,
+        string path,
+        LoadedSecretStore? secretStore)
+    {
+        var kind = RequiredScalar(node, "kind", path);
+        switch (kind)
+        {
+            case "Secret":
+                RequireOnlyKeys(node, path, "kind", "name");
+                var name = RequiredScalar(node, "name", path);
+                if (secretStore?.FileSecrets is not { } secrets)
+                {
+                    throw new ManifestLoadException(
+                        $"{path} kind Secret requires secretStore.kind file. The host reads that file because the engine does not expose secret lookup.");
+                }
+
+                return secrets.TryGetValue(name, out var value)
+                    ? value
+                    : throw new ManifestLoadException($"{path} secret '{name}' is not in the file secret store.");
+            case "EnvironmentVariable":
+                RequireOnlyKeys(node, path, "kind", "name", "default");
+                var variable = RequiredScalar(node, "name", path);
+                if (!EnvironmentName.IsMatch(variable))
+                {
+                    throw new ManifestLoadException(
+                        $"{path}.name must be an uppercase identifier containing only A-Z, 0-9, and _.");
+                }
+
+                var environment = Environment.GetEnvironmentVariable(variable);
+                if (!string.IsNullOrWhiteSpace(environment))
+                    return environment;
+                if (TryScalar(node, "default", out var fallback))
+                    return fallback;
+                throw new ManifestLoadException($"Environment variable '{variable}' for {path} is not set.");
+            case "file":
+                throw new ManifestLoadException(
+                    $"{path}.kind 'file' is not a Drasi config value. Use kind: Secret or kind: EnvironmentVariable.");
+            default:
+                throw new ManifestLoadException($"{path}.kind must be Secret or EnvironmentVariable.");
+        }
+    }
+
+    private static void RequireSecretReferences(JsonNode? node, string path, LoadedSecretStore? secretStore)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                if (obj["kind"] is JsonValue kind &&
+                    kind.GetValueKind() == JsonValueKind.String &&
+                    StringComparer.Ordinal.Equals(kind.GetValue<string>(), "Secret"))
+                {
+                    if (secretStore is null)
+                        throw new ManifestLoadException($"{path} uses kind Secret, which requires secretStore.");
+                    if (obj["name"] is not JsonValue name ||
+                        name.GetValueKind() != JsonValueKind.String ||
+                        string.IsNullOrWhiteSpace(name.GetValue<string>()))
+                    {
+                        throw new ManifestLoadException($"{path}.name is required.");
+                    }
+
+                    if (secretStore.FileSecrets is { } secrets &&
+                        !secrets.ContainsKey(name.GetValue<string>()))
+                    {
+                        throw new ManifestLoadException(
+                            $"{path} secret '{name.GetValue<string>()}' is not in the file secret store.");
+                    }
+                }
+
+                foreach (var pair in obj)
+                    RequireSecretReferences(pair.Value, $"{path}.{pair.Key}", secretStore);
+                break;
+            case JsonArray array:
+                for (var index = 0; index < array.Count; index++)
+                    RequireSecretReferences(array[index], $"{path}[{index}]", secretStore);
+                break;
+        }
+    }
+
+    private static string ResolveManifestPath(string configuredPath, string manifestPath)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(manifestPath))
+            ?? throw new ManifestLoadException("The manifest path has no parent directory.");
+        return Path.GetFullPath(configuredPath, directory);
     }
 
     private static void EnsurePrivateRegularFile(string path, string description)
@@ -580,13 +714,6 @@ public static class SentinelManifestLoader
                 exception);
         }
     }
-
-    private static string TrimOneTrailingNewline(string value) =>
-        value.EndsWith("\r\n", StringComparison.Ordinal)
-            ? value[..^2]
-            : value.EndsWith('\n')
-                ? value[..^1]
-                : value;
 
     private static Dictionary<QueryId, QueryDefinition> ReadQueries(
         YamlMappingNode root,

@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Drasi.Sentinel.Host;
 
 namespace Drasi.Sentinel.Tests;
@@ -7,6 +8,7 @@ public sealed class ExampleManifestTests
     [Theory]
     [InlineData("invoice-overdue")]
     [InlineData("accounting-local-demo")]
+    [InlineData("curbside-local-demo")]
     public void Load_accepts_each_example_with_private_fixture_files(string exampleName)
     {
         if (OperatingSystem.IsWindows())
@@ -35,55 +37,42 @@ public sealed class ExampleManifestTests
             CopyPrivateFixture(
                 sourceDirectory,
                 directory,
-                "postgres.connection-string.example",
-                "postgres.connection-string");
-            if (exampleName == "accounting-local-demo")
+                "secrets.json.example",
+                "secrets.json");
+
+            var manifest = SentinelManifestLoader.Load(Path.Combine(directory, "sentinel.yaml"));
+            var localDemo = exampleName is "accounting-local-demo" or "curbside-local-demo";
+
+            Assert.Equal("test-model", manifest.Agent!.Model);
+            if (exampleName == "curbside-local-demo")
             {
-                CopyPrivateFixture(
-                    sourceDirectory,
-                    directory,
-                    "postgres.password.example",
-                    "postgres.password");
+                Assert.Empty(manifest.SafeCatalog.Queries);
+                Assert.Equal(
+                    ["source/postgres", "bootstrap/postgres", "source/mysql", "bootstrap/mysql", "secret-store/file"],
+                    manifest.Plugins);
             }
             else
             {
-                CopyPrivateFixture(
-                    sourceDirectory,
-                    directory,
-                    "postgres.cdc-password.example",
-                    "postgres.cdc-password");
-                CopyPrivateFixture(
-                    sourceDirectory,
-                    directory,
-                    "postgres.cdc-port.example",
-                    "postgres.cdc-port");
+                Assert.NotEmpty(manifest.SafeCatalog.Queries);
+                Assert.Equal(["source/postgres", "bootstrap/postgres", "secret-store/file"], manifest.Plugins);
             }
-            if (exampleName == "invoice-overdue")
-            {
-                CopyPrivateFixture(
-                    sourceDirectory,
-                    directory,
-                    "a2a-public-key.pem.example",
-                    "a2a-public-key.pem");
-            }
-
-            var manifest = SentinelManifestLoader.Load(Path.Combine(directory, "sentinel.yaml"));
-
-            Assert.Equal("test-model", manifest.Agent!.Model);
-            Assert.NotEmpty(manifest.SafeCatalog.Queries);
+            Assert.Equal("file", manifest.SecretStore?.Kind);
+            Assert.True(Path.IsPathRooted(manifest.SecretStore!.Configuration["path"]!.GetValue<string>()));
+            Assert.Contains("Host=127.0.0.1", manifest.DatabaseConnectionString, StringComparison.Ordinal);
+            Assert.All(
+                manifest.ExecutableCatalog.Sources.Values,
+                source => Assert.Equal(
+                    "Secret",
+                    source.Configuration["password"]!["kind"]!.GetValue<string>()));
             Assert.NotEmpty(manifest.SafeCatalog.Reactions);
-            Assert.Equal(
-                exampleName == "accounting-local-demo" ? ServiceProfile.Demo : ServiceProfile.Production,
-                manifest.Profile);
+            Assert.Equal(localDemo ? ServiceProfile.Demo : ServiceProfile.Production, manifest.Profile);
             Assert.IsType(
-                exampleName == "accounting-local-demo"
-                    ? typeof(A2aAnonymousManifest)
-                    : typeof(A2aJwtManifest),
+                localDemo ? typeof(A2aAnonymousManifest) : typeof(A2aJwtManifest),
                 manifest.A2aAuthentication);
             Assert.Equal(
                 exampleName == "accounting-local-demo" ? new Uri("http://127.0.0.1:8082/") : null,
                 manifest.WebhookUrl);
-            Assert.Equal(exampleName == "accounting-local-demo", manifest.QueryAuthoringEnabled);
+            Assert.Equal(localDemo, manifest.QueryAuthoringEnabled);
         }
         finally
         {

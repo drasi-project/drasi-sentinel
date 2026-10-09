@@ -198,7 +198,7 @@ public static partial class QueryText
     [System.Text.RegularExpressions.GeneratedRegex(@"\(\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*:\s*([A-Za-z_][A-Za-z0-9_]*)")]
     private static partial System.Text.RegularExpressions.Regex NodeLabelPattern();
 
-    [System.Text.RegularExpressions.GeneratedRegex(@"\b[A-Za-z_][A-Za-z0-9_]*\.([A-Za-z_][A-Za-z0-9_]*)")]
+    [System.Text.RegularExpressions.GeneratedRegex(@"\b[A-Za-z_][A-Za-z0-9_]*\.([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*\()")]
     private static partial System.Text.RegularExpressions.Regex PropertyAccess();
 
     [System.Text.RegularExpressions.GeneratedRegex(@"\bMATCH\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]

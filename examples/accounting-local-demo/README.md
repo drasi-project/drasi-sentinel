@@ -6,9 +6,9 @@ Inspector at `http://127.0.0.1:8081`. Enter the printed Agent Card URL in the
 browser UI.
 
 The demo binds PostgreSQL only to `127.0.0.1:5432`. It uses the local
-`sentinel` user for both Sentinel state and CDC, and creates owner-only
-`secrets/postgres.connection-string` and `secrets/postgres.password` files
-for the manifest. If port 5432 is occupied, stop its owner before starting
+`sentinel` user for both Sentinel state and CDC, and writes owner-only
+`secrets/secrets.json`. Source passwords are `kind: Secret` references in
+that file. If port 5432 is occupied, stop its owner before starting
 the demo.
 
 In Inspector send a message and ask:

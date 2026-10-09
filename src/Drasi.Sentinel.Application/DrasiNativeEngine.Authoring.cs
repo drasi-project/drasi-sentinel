@@ -6,6 +6,9 @@ namespace Drasi.Sentinel.Application;
 
 public sealed partial class DrasiNativeEngine : INativeQueryRuntime
 {
+    private readonly Dictionary<string, IReadOnlyList<(string Label, IReadOnlyList<string> Properties)>> _discovered =
+        new(StringComparer.Ordinal);
+
     public async Task<SourceGraph> DescribeAsync(CancellationToken cancellationToken)
     {
         var engine = RequireEngine();
@@ -27,7 +30,22 @@ public sealed partial class DrasiNativeEngine : INativeQueryRuntime
 
             if (schema is null)
             {
-                missing.Add(source.Id);
+                var discovered = await DiscoverLabelsAsync(source.Id, cancellationToken);
+                if (discovered.Count == 0)
+                {
+                    missing.Add(source.Id);
+                    continue;
+                }
+
+                foreach (var (label, properties) in discovered)
+                {
+                    if (!nodes.TryGetValue(label, out var merged))
+                        nodes[label] = merged = new MutableLabel(label);
+                    merged.Sources.Add(source.Id);
+                    foreach (var property in properties)
+                        merged.Properties.TryAdd(property, "unknown");
+                }
+
                 continue;
             }
 
@@ -156,18 +174,64 @@ public sealed partial class DrasiNativeEngine : INativeQueryRuntime
 
     public async Task<JsonNode?> SourceSchemaAsync(string sourceId, CancellationToken cancellationToken)
     {
-        var schema = await RequireEngine().GetSourceSchemaAsync(sourceId, cancellationToken);
-        return schema is null ? null : SchemaJson(schema);
+        SourceSchema? schema;
+        try
+        {
+            schema = await RequireEngine().GetSourceSchemaAsync(sourceId, cancellationToken);
+        }
+        catch (DrasiException)
+        {
+            schema = null;
+        }
+
+        if (schema is not null)
+            return SchemaJson(schema);
+        var discovered = await DiscoverLabelsAsync(sourceId, cancellationToken);
+        return discovered.Count == 0 ? null : DiscoveredSchema(discovered);
     }
 
     public async Task<JsonNode> GraphSchemaAsync(CancellationToken cancellationToken)
     {
         var schema = await RequireEngine().GetGraphSchemaAsync(cancellationToken);
+        var nodes = schema.Nodes.DeepClone() as JsonObject ?? new JsonObject();
+        var missing = new JsonArray();
+        foreach (var id in schema.SourcesWithoutSchema)
+        {
+            var discovered = await DiscoverLabelsAsync(id, cancellationToken);
+            if (discovered.Count == 0)
+            {
+                missing.Add(id);
+                continue;
+            }
+
+            foreach (var (label, properties) in discovered)
+            {
+                if (nodes[label] is not JsonObject entry)
+                {
+                    entry = new JsonObject
+                    {
+                        ["sources"] = new JsonArray(),
+                        ["properties"] = new JsonArray(properties.Select(name => (JsonNode)new JsonObject
+                        {
+                            ["name"] = name,
+                            ["dataType"] = "unknown",
+                        }).ToArray()),
+                    };
+                    nodes[label] = entry;
+                }
+
+                var sources = entry["sources"] as JsonArray ?? new JsonArray();
+                if (!sources.Select(item => item?.GetValue<string>()).Contains(id, StringComparer.Ordinal))
+                    sources.Add(id);
+                entry["sources"] = sources;
+            }
+        }
+
         return new JsonObject
         {
-            ["nodes"] = schema.Nodes.DeepClone(),
+            ["nodes"] = nodes,
             ["relations"] = schema.Relations.DeepClone(),
-            ["sourcesWithoutSchema"] = new JsonArray(schema.SourcesWithoutSchema.Select(id => (JsonNode)JsonValue.Create(id)!).ToArray()),
+            ["sourcesWithoutSchema"] = missing,
         };
     }
 
@@ -273,6 +337,52 @@ public sealed partial class DrasiNativeEngine : INativeQueryRuntime
 
         return lines;
     }
+
+    private async Task<IReadOnlyList<(string Label, IReadOnlyList<string> Properties)>> DiscoverLabelsAsync(
+        string sourceId,
+        CancellationToken cancellationToken)
+    {
+        if (_discovered.TryGetValue(sourceId, out var cached))
+            return cached;
+
+        var probe = await ProbeAsync("MATCH (n) RETURN n", [sourceId], [], TimeSpan.FromSeconds(20), cancellationToken);
+        if (!probe.Ok)
+            return [];
+
+        var grouped = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var row in probe.Rows)
+        {
+            var names = QuerySamples.NodeProperties([row]);
+            foreach (var label in QuerySamples.Labels([row]))
+            {
+                if (!grouped.TryGetValue(label, out var properties))
+                    grouped[label] = properties = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var name in names)
+                    properties.Add(name);
+            }
+        }
+
+        var discovered = grouped
+            .Select(item => (item.Key, (IReadOnlyList<string>)item.Value.OrderBy(name => name, StringComparer.Ordinal).ToArray()))
+            .ToArray();
+        _discovered[sourceId] = discovered;
+        return discovered;
+    }
+
+    private static JsonObject DiscoveredSchema(
+        IReadOnlyList<(string Label, IReadOnlyList<string> Properties)> discovered) => new()
+    {
+        ["nodes"] = new JsonArray(discovered.Select(item => (JsonNode)new JsonObject
+        {
+            ["label"] = item.Label,
+            ["properties"] = new JsonArray(item.Properties.Select(name => (JsonNode)new JsonObject
+            {
+                ["name"] = name,
+                ["type"] = "unknown",
+            }).ToArray()),
+        }).ToArray()),
+        ["relations"] = new JsonArray(),
+    };
 
     private static JsonObject SchemaJson(SourceSchema schema) => new()
     {

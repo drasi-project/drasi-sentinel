@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Drasi.Sentinel.Host;
 
 namespace Drasi.Sentinel.Tests;
@@ -10,17 +11,18 @@ public sealed class SentinelManifestLoaderTests
         if (OperatingSystem.IsWindows())
             return;
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(Path.Combine(directory, "secrets"));
-        var secret = Path.Combine(directory, "secrets", "db");
-        File.WriteAllText(secret, "Host=127.0.0.1;Username=sentinel;Password=secret;Database=sentinel\n");
-        File.SetUnixFileMode(secret, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        Directory.CreateDirectory(directory);
         var manifest = Path.Combine(directory, "sentinel.yaml");
+        var previous = Environment.GetEnvironmentVariable("SENTINEL_TEST_DATABASE");
+        Environment.SetEnvironmentVariable(
+            "SENTINEL_TEST_DATABASE",
+            "Host=127.0.0.1;Username=sentinel;Password=secret;Database=sentinel");
         File.WriteAllText(manifest, """
             service:
               profile: demo
               database:
-                kind: file
-                path: secrets/db
+                kind: EnvironmentVariable
+                name: SENTINEL_TEST_DATABASE
               a2a:
                 authentication:
                   mode: anonymous
@@ -50,6 +52,88 @@ public sealed class SentinelManifestLoaderTests
         }
         finally
         {
+            Environment.SetEnvironmentVariable("SENTINEL_TEST_DATABASE", previous);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_rejects_plugin_file_secrets_and_passes_secret_references_through()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(directory, "secrets"));
+        var manifest = Path.Combine(directory, "sentinel.yaml");
+        var previous = Environment.GetEnvironmentVariable("SENTINEL_TEST_DATABASE");
+        Environment.SetEnvironmentVariable("SENTINEL_TEST_DATABASE", "Host=127.0.0.1;Database=sentinel");
+        File.WriteAllText(manifest, """
+            service:
+              profile: demo
+              database:
+                kind: EnvironmentVariable
+                name: SENTINEL_TEST_DATABASE
+              a2a:
+                authentication:
+                  mode: anonymous
+            sources:
+              - id: ledger
+                kind: postgres
+                config:
+                  password:
+                    kind: file
+                    path: secrets/db
+            reactions:
+              - id: notify
+            """);
+
+        try
+        {
+            var rejected = Assert.Throws<ManifestLoadException>(() => SentinelManifestLoader.Load(manifest));
+            Assert.Contains("not a Drasi config value", rejected.Message, StringComparison.Ordinal);
+
+            var secrets = Path.Combine(directory, "secrets", "secrets.json");
+            File.WriteAllText(secrets, """
+                {"sentinel-connection-string":"Host=127.0.0.1;Database=sentinel","postgres-password":"example-only"}
+                """);
+            File.SetUnixFileMode(secrets, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            File.WriteAllText(manifest, """
+                plugins:
+                  - ref: source/postgres
+                  - ref: secret-store/file
+                secretStore:
+                  kind: file
+                  path: secrets/secrets.json
+                service:
+                  profile: demo
+                  database:
+                    kind: Secret
+                    name: sentinel-connection-string
+                  a2a:
+                    authentication:
+                      mode: anonymous
+                sources:
+                  - id: ledger
+                    kind: postgres
+                    config:
+                      password:
+                        kind: Secret
+                        name: postgres-password
+                queries: []
+                reactions:
+                  - id: notify
+                """);
+
+            var loaded = SentinelManifestLoader.Load(manifest);
+            var password = loaded.ExecutableCatalog.Sources["ledger"].Configuration["password"]!;
+            Assert.Equal("Secret", password["kind"]!.GetValue<string>());
+            Assert.Equal("postgres-password", password["name"]!.GetValue<string>());
+            Assert.DoesNotContain("example-only", password.ToJsonString(), StringComparison.Ordinal);
+            Assert.Equal("Host=127.0.0.1;Database=sentinel", loaded.DatabaseConnectionString);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SENTINEL_TEST_DATABASE", previous);
             Directory.Delete(directory, recursive: true);
         }
     }

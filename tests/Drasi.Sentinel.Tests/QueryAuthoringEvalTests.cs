@@ -96,6 +96,189 @@ public sealed class QueryAuthoringEvalTests
 
         Assert.Contains("ledger", enabled, StringComparison.Ordinal);
         Assert.DoesNotContain("password", enabled, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("catalog JSON may be []", enabled, StringComparison.Ordinal);
+        Assert.Contains("declares no joins", enabled, StringComparison.Ordinal);
+        Assert.Contains("stored values", enabled, StringComparison.Ordinal);
+        Assert.Contains("trueFor", enabled, StringComparison.Ordinal);
+        Assert.DoesNotContain("Never invent subscription ids, query ids, or states", enabled, StringComparison.Ordinal);
+        Assert.Contains("committed id", AgentTurn.Recovery("query_unknown", authoring: true), StringComparison.Ordinal);
+        Assert.Contains("Do not invent another id", AgentTurn.Recovery("query_unknown", authoring: true), StringComparison.Ordinal);
+        Assert.DoesNotContain("committed id", AgentTurn.Recovery("query_unknown"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Subscribe_rejects_a_catalog_query_that_omits_a_named_label()
+    {
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger", "physical"], StringComparer.Ordinal);
+        await store.SaveAsync(new AuthoredQuery(
+            new QueryId("pickup-order-ready"),
+            "Ready orders.",
+            "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.status AS status",
+            ["ledger"],
+            []), CancellationToken.None);
+        var runtime = new RecordingRuntime();
+        runtime.Schemas["ledger"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[]}],"relations":[]}""");
+        runtime.Schemas["physical"] = JsonNode.Parse("""{"nodes":[{"label":"vehicles","properties":[]}],"relations":[]}""");
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        var session = AgentToolSession.Create(
+            Unused(),
+            Principal(),
+            new("task", "message"),
+            CancellationToken.None,
+            workbench,
+            "Tell me when an order is ready for pickup and the vehicle with the same plate is at the curb.");
+        var rejected = await session.InvokeAsync(
+            AgentTurn.SubscribeTool,
+            new Dictionary<string, string?> { ["query"] = "pickup-order-ready" });
+        Assert.Contains("vehicles", rejected, StringComparison.Ordinal);
+        Assert.Contains("query_rejected", rejected, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Commit_rejects_a_phrase_when_the_stored_value_is_in_the_sample()
+    {
+        var runtime = new RecordingRuntime();
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger"], StringComparer.Ordinal);
+        var authoring = new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify"));
+        var rejected = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'already open' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "open-orders",
+            ["description"] = "Orders described as already open.",
+        }, CancellationToken.None);
+        Assert.Contains("open", rejected, StringComparison.Ordinal);
+        Assert.Contains("Stored values", rejected, StringComparison.Ordinal);
+        Assert.Empty(await store.ListAsync(CancellationToken.None));
+
+        var abbreviatedRuntime = new RecordingRuntime
+        {
+            Row = JsonNode.Parse("""{"id":"1","status":"Curbside"}""")!,
+        };
+        var abbreviated = await new QueryAuthoring(
+            abbreviatedRuntime,
+            store,
+            catalog,
+            sources,
+            new ReactionId("notify")).AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'Curb' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "curb-orders",
+            ["description"] = "Orders at a shortened curb status.",
+        }, CancellationToken.None);
+        Assert.Contains("Curbside", abbreviated, StringComparison.Ordinal);
+        Assert.Contains("Stored values", abbreviated, StringComparison.Ordinal);
+
+        var split = new RecordingRuntime { FailCombinedProbes = true, Row = JsonNode.Parse("""{"id":"1","status":"ready"}""")! };
+        var phrase = await new QueryAuthoring(split, store, catalog, new HashSet<string>(["ledger", "other"], StringComparer.Ordinal), new ReactionId("notify"))
+            .AttemptJsonAsync(new Dictionary<string, string?>
+            {
+                ["query"] = "MATCH (n:orders) WHERE n.status = 'ready for pickup' RETURN n.id AS id",
+                ["sources"] = "ledger,other",
+                ["commit_as"] = "phrase-orders",
+                ["description"] = "Orders described with a longer phrase.",
+                ["caller_text"] = "Tell me when an order is ready for pickup.",
+            }, CancellationToken.None);
+        Assert.Contains("ready", phrase, StringComparison.Ordinal);
+        Assert.Contains("Stored values", phrase, StringComparison.Ordinal);
+        Assert.DoesNotContain("phrase-orders", (await store.ListAsync(CancellationToken.None)).Select(query => query.Id.Value));
+
+        var unfiltered = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) RETURN n.id AS id, n.status AS status",
+            ["sources"] = "ledger",
+            ["commit_as"] = "all-orders",
+            ["description"] = "All orders.",
+            ["caller_text"] = "Tell me when an order is open.",
+        }, CancellationToken.None);
+        Assert.Contains("open", unfiltered, StringComparison.Ordinal);
+        Assert.Contains("missing from the query", unfiltered, StringComparison.Ordinal);
+        Assert.Empty(await store.ListAsync(CancellationToken.None));
+
+        var counted = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN count(n)",
+            ["sources"] = "ledger",
+            ["commit_as"] = "open-count",
+            ["description"] = "Count of open orders.",
+            ["caller_text"] = "Tell me when an order is open.",
+        }, CancellationToken.None);
+        Assert.Contains("not a count", counted, StringComparison.Ordinal);
+        Assert.Empty(await store.ListAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Commit_rejects_a_cross_label_equality_without_joins()
+    {
+        var runtime = new RecordingRuntime();
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = QueryAuthoringEvalSupport.SourceIds.ToHashSet(StringComparer.Ordinal);
+        var authoring = new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify"));
+        var rejected = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (o:orders) MATCH (p:payments) WHERE o.id = p.order_id RETURN o.id AS id",
+            ["sources"] = "orders-db,payments-db",
+            ["commit_as"] = "paid-orders",
+            ["description"] = "Orders with a matching payment.",
+        }, CancellationToken.None);
+        Assert.Contains("order_id", rejected, StringComparison.Ordinal);
+        Assert.Contains("declares no joins", rejected, StringComparison.Ordinal);
+        Assert.Contains("LINK", rejected, StringComparison.Ordinal);
+        Assert.Empty(await store.ListAsync(CancellationToken.None));
+
+        var accepted = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (o:orders)-[:LINK]->(p:payments) WHERE o.status = 'open' RETURN o.id AS id, o.status AS status, p.order_id AS order_id",
+            ["sources"] = "orders-db,payments-db",
+            ["joins"] = """[{"id":"LINK","keys":[{"label":"orders","property":"id"},{"label":"payments","property":"order_id"}]}]""",
+            ["commit_as"] = "paid-orders",
+            ["description"] = "Orders with a matching payment.",
+        }, CancellationToken.None);
+        using var committed = JsonDocument.Parse(accepted);
+        Assert.Equal("paid-orders", committed.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+    }
+
+    [Fact]
+    public async Task Commit_requires_true_for_when_the_caller_names_a_duration()
+    {
+        var runtime = new RecordingRuntime();
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger"], StringComparer.Ordinal);
+        var authoring = new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify"));
+        var rejected = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "open-for-ten",
+            ["description"] = "Orders open for ten seconds.",
+            ["caller_text"] = "Tell me when an order has been open for 10 seconds.",
+        }, CancellationToken.None);
+        Assert.Contains("trueFor", rejected, StringComparison.Ordinal);
+        Assert.Contains("seconds: 10", rejected, StringComparison.Ordinal);
+        Assert.Empty(await store.ListAsync(CancellationToken.None));
+
+        var accepted = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE drasi.trueFor(n.status = 'open', duration({ seconds: 10 })) RETURN n.id AS id, n.status AS status",
+            ["sources"] = "ledger",
+            ["commit_as"] = "open-for-ten",
+            ["description"] = "Orders open for ten seconds.",
+            ["caller_text"] = "Tell me when an order has been open for 10 seconds.",
+        }, CancellationToken.None);
+        using var committed = JsonDocument.Parse(accepted);
+        Assert.Equal("open-for-ten", committed.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
     }
 
     [Fact]
@@ -176,26 +359,37 @@ public sealed class QueryAuthoringEvalTests
         Assert.False(sql.RootElement.TryGetProperty("Committed", out _));
         Assert.Empty(runtime.Added);
 
-        var mismatch = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.GenerateQueryTool, new Dictionary<string, string?>
+        var wrongCase = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.GenerateQueryTool, new Dictionary<string, string?>
         {
             ["query"] = "MATCH (n:orders) WHERE n.status = 'OPEN' RETURN n.id AS id",
             ["sources"] = "ledger",
-            ["commit_as"] = "open-orders",
+            ["commit_as"] = "future-orders",
             ["description"] = "Reports open orders.",
         }));
-        Assert.False(mismatch.RootElement.TryGetProperty("Committed", out _));
-        Assert.Contains("label has data", mismatch.RootElement.GetProperty("CommitSkippedReason").GetString());
-        Assert.Empty(runtime.Added);
+        Assert.False(wrongCase.RootElement.TryGetProperty("Committed", out _));
+        Assert.Contains("open", wrongCase.RootElement.GetProperty("CommitSkippedReason").GetString());
+        Assert.DoesNotContain(runtime.Added, query => query.Id.Value == "future-orders");
+
+        var future = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.GenerateQueryTool, new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'shipped' RETURN n.id AS id, n.status AS status",
+            ["sources"] = "ledger",
+            ["commit_as"] = "future-orders",
+            ["description"] = "Reports shipped orders.",
+        }));
+        Assert.Equal("future-orders", future.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+        Assert.Contains("future value", future.RootElement.GetProperty("Hint").GetString());
+        Assert.Contains(runtime.Added, query => query.Id.Value == "future-orders");
 
         var committed = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
         {
             ["id"] = "open-orders",
-            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id",
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id, n.status AS status",
             ["sources"] = "ledger",
             ["description"] = "Reports open orders.",
         }));
         Assert.Equal("open-orders", committed.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
-        Assert.Single(runtime.Added);
+        Assert.Contains(runtime.Added, query => query.Id.Value == "open-orders");
 
         var diagnosis = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.DiagnoseQueryTool, new Dictionary<string, string?>
         {
@@ -206,12 +400,12 @@ public sealed class QueryAuthoringEvalTests
         var replay = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
         {
             ["id"] = "open-orders",
-            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id",
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id, n.status AS status",
             ["sources"] = "ledger",
             ["description"] = "Reports open orders.",
         }));
         Assert.Equal("open-orders", replay.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
-        Assert.Single(runtime.Added);
+        Assert.Equal(1, runtime.Added.Count(query => query.Id.Value == "open-orders"));
 
         var result = await tools.InvokeAsync(AgentTurn.SubscribeTool, new Dictionary<string, string?> { ["query"] = "open-orders" });
         using var subscription = JsonDocument.Parse(result);
@@ -270,6 +464,51 @@ public sealed class QueryAuthoringEvalTests
         new TaskEventNotifier(),
         TimeProvider.System);
 
+    [Fact]
+    public void Unlabeled_match_rows_expose_labels_from_element_metadata()
+    {
+        var row = JsonNode.Parse("""
+            {"n":"Element(Node { metadata: ElementMetadata { labels: [\"widgets\"], effective_from: 1 }, properties: ElementPropertyMap { values: {\"code\": String(\"ready\")} } })"}
+            """)!;
+        Assert.Equal(["widgets"], QuerySamples.Labels([row]));
+        Assert.Equal(["code"], QuerySamples.NodeProperties([row]));
+    }
+
+    [Fact]
+    public void Node_properties_read_drasi_element_strings()
+    {
+        var row = JsonNode.Parse("""
+            {"n":"Element(Node { properties: ElementPropertyMap { values: {\"location\": String(\"Parking\"), \"plate\": String(\"A1234\")} } })"}
+            """)!;
+        var names = QuerySamples.NodeProperties([row]);
+        Assert.Equal(["location", "plate"], names);
+        Assert.Equal("Parking", QuerySamples.Examples([row])["location"][0]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Source_schema_does_not_invent_labels_when_the_plugin_omits_a_schema()
+    {
+        var runtime = new RecordingRuntime();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var store = new InMemoryAuthoredQueryStore();
+        var sources = new HashSet<string>(StringComparer.Ordinal) { "physical-ops" };
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+
+        using var described = JsonDocument.Parse(await workbench.InvokeAsync(
+            QueryWorkbench.GetSourceSchemaTool,
+            new Dictionary<string, string?> { ["id"] = "physical-ops" },
+            CancellationToken.None));
+
+        Assert.Equal("none", described.RootElement.GetProperty("Method").GetString());
+        Assert.False(described.RootElement.GetProperty("Described").GetBoolean());
+        Assert.Empty(runtime.Probes);
+    }
+
     private sealed class FakeQueryRuntime : INativeQueryRuntime
     {
         public List<AuthoredQuery> Added { get; } = [];
@@ -284,7 +523,7 @@ public sealed class QueryAuthoringEvalTests
             TimeSpan readyTimeout,
             CancellationToken cancellationToken)
         {
-            if (cypher.Contains("'OPEN'", StringComparison.Ordinal))
+            if (cypher.Contains("'OPEN'", StringComparison.Ordinal) || cypher.Contains("'shipped'", StringComparison.Ordinal))
                 return Task.FromResult(new QueryProbe(true, [], null));
             var row = JsonNode.Parse("""{"id":"1","status":"open"}""")!;
             return Task.FromResult(new QueryProbe(true, [row], null));

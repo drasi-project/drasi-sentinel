@@ -1,11 +1,18 @@
 agent:
   url: { env: AZURE_OPENAI_ENDPOINT }
   model: { env: AZURE_OPENAI_MODEL }
+plugins:
+  - ref: source/postgres
+  - ref: bootstrap/postgres
+  - ref: secret-store/file
+secretStore:
+  kind: file
+  path: secrets/secrets.json
 service:
   profile: demo
   database:
-    kind: file
-    path: secrets/postgres.connection-string
+    kind: Secret
+    name: sentinel-connection-string
   a2a:
     authentication:
       mode: anonymous
@@ -22,8 +29,8 @@ sources:
       database: sentinel
       user: sentinel
       password:
-        kind: file
-        path: secrets/postgres.password
+        kind: Secret
+        name: postgres-password
       tables: [invoices]
       slotName: drasi_accounting_slot
       publicationName: drasi_accounting_publication
@@ -38,8 +45,8 @@ sources:
       database: sentinel
       user: sentinel
       password:
-        kind: file
-        path: secrets/postgres.password
+        kind: Secret
+        name: postgres-password
       tables: [invoices]
       slotName: drasi_accounting_slot
       publicationName: drasi_accounting_publication

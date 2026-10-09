@@ -1,0 +1,88 @@
+agent:
+  url: { env: AZURE_OPENAI_ENDPOINT }
+  model: { env: AZURE_OPENAI_MODEL }
+plugins:
+  - ref: source/postgres
+  - ref: bootstrap/postgres
+  - ref: source/mysql
+  - ref: bootstrap/mysql
+  - ref: secret-store/file
+secretStore:
+  kind: file
+  path: secrets/secrets.json
+service:
+  profile: demo
+  database:
+    kind: Secret
+    name: sentinel-connection-string
+  a2a:
+    authentication:
+      mode: anonymous
+  query_authoring:
+    enabled: true
+sources:
+  - id: retail-ops
+    kind: postgres
+    config:
+      host: 127.0.0.1
+      port: 5433
+      database: retail
+      user: sentinel
+      password:
+        kind: Secret
+        name: postgres-password
+      tables: [orders]
+      slotName: drasi_retail_slot
+      publicationName: drasi_retail_publication
+      sslMode: disable
+      tableKeys:
+        - table: orders
+          keyColumns: [id]
+    bootstrap:
+      kind: postgres
+      host: 127.0.0.1
+      port: 5433
+      database: retail
+      user: sentinel
+      password:
+        kind: Secret
+        name: postgres-password
+      tables: [orders]
+      slotName: drasi_retail_slot
+      publicationName: drasi_retail_publication
+      sslMode: disable
+      tableKeys:
+        - table: orders
+          keyColumns: [id]
+  - id: physical-ops
+    kind: mysql
+    config:
+      host: 127.0.0.1
+      port: 3309
+      database: physical
+      user: sentinel
+      password:
+        kind: Secret
+        name: mysql-password
+      tables: [vehicles]
+      sslMode: disabled
+      serverId: 5403
+      tableKeys:
+        - table: vehicles
+          keyColumns: [plate]
+    bootstrap:
+      kind: mysql
+      host: 127.0.0.1
+      port: 3309
+      database: physical
+      user: sentinel
+      password:
+        kind: Secret
+        name: mysql-password
+      tables: [vehicles]
+      tableKeys:
+        - table: vehicles
+          keyColumns: [plate]
+queries: []
+reactions:
+  - id: notify-pickup-staff

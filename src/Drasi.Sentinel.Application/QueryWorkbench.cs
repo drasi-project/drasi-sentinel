@@ -14,6 +14,8 @@ public interface IQueryWorkbench
         string name,
         IReadOnlyDictionary<string, string?>? arguments,
         CancellationToken cancellationToken);
+
+    Task<string?> CoverageGapAsync(string queryId, string callerText, CancellationToken cancellationToken);
 }
 
 public sealed class QueryWorkbench(
@@ -50,23 +52,54 @@ public sealed class QueryWorkbench(
 
     public IReadOnlyList<AgentTool> Tools { get; } =
     [
-        new(GetSourceSchemaTool, "Get the schema one configured source reports: labels, properties, and type hints. Pass id. Connection settings are not included.", [new AgentToolArgument("id", true)]),
-        new(GetGraphSchemaTool, "Get the merged schema across configured sources, including sources that did not report a schema. Use this before writing Cypher.", (string?)null),
-        new(ProfileSourceSchemaTool, "Sample a configured source and return property names plus a few real example values. Pass id. sampleLabels is an optional comma-separated label list. Filter only on values you see here. String comparison is case-sensitive.", [new AgentToolArgument("id", true), new AgentToolArgument("sampleLabels", false), new AgentToolArgument("limit", false)]),
-        new(TestQueryTool, "Add the query under a temporary id, sample its rows, then remove it. Pass query and sources. This does not save the query. If it returns no rows, do not report that nothing was found. " + JoinArgument, [new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false)]),
-        new(GenerateQueryTool, "Validate a draft, or scaffold one when query is omitted. Tests it unless it is not Cypher. Pass commit_as and description only to save a query that already tested correctly. commit_as is a lowercase id of letters, digits, and hyphens. sources is required. " + JoinArgument, [new AgentToolArgument("query", false), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("label", false), new AgentToolArgument("commit_as", false), new AgentToolArgument("description", false)]),
+        new(GetSourceSchemaTool, "Get labels and properties for one configured source. Pass id. If the schema API returns nothing, this samples an unlabeled match and reads labels from the returned nodes. Use those labels. Do not invent labels.", [new AgentToolArgument("id", true)]),
+        new(GetGraphSchemaTool, "Get the merged schema. A source that omits a schema is sampled with an unlabeled match. Use every returned label. Do not copy a label onto a source that did not return it.", (string?)null),
+        new(ProfileSourceSchemaTool, "Sample a configured source and return property names plus stored example values from current rows, including a value that appears on only one row. Pass id. sampleLabels is an optional comma-separated label list. Use one of those examples for a filter. Do not write the caller's phrase or a shorter form when an example is the stored value. String comparison is case-sensitive.", [new AgentToolArgument("id", true), new AgentToolArgument("sampleLabels", false), new AgentToolArgument("limit", false)]),
+        new(TestQueryTool, "Add the query under a temporary id, sample its rows, then remove it. Pass query and sources. This does not save the query. If it returns no rows, do not report that nothing was found. A future value the caller asked to watch can still be committed. " + JoinArgument, [new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false)]),
+        new(GenerateQueryTool, "Validate a draft, or scaffold one when query is omitted. Tests it unless it is not Cypher. Pass commit_as and description to save a query that tested without error, including a future value that is not present yet. commit_as is a lowercase id of letters, digits, and hyphens. sources is required. " + JoinArgument, [new AgentToolArgument("query", false), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("label", false), new AgentToolArgument("commit_as", false), new AgentToolArgument("description", false)]),
         new(AddQueryTool, "Save a tested Cypher query and register it. Pass id, query, sources, and description. id is a lowercase id of letters, digits, and hyphens. The host binds the reaction. Then call subscribe_to_changes with id. " + JoinArgument, [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("description", true), new AgentToolArgument("joins", false)]),
         new(UpdateQueryTool, "Replace the text of an authored query. Pass id, query, and sources. Curated queries cannot be updated. Re-test before calling this.", [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("description", false)]),
         new(ListQueriesTool, "List queries and whether each is running.", (string?)null),
         new(GetQueryResultsTool, "Return the current rows of a query. Pass id.", [new AgentToolArgument("id", true)]),
         new(RemoveQueryTool, "Remove an authored query. Curated queries cannot be removed. Pass id.", [new AgentToolArgument("id", true)]),
         new(DiagnoseQueryTool, "Status, result metrics, and a short live log window for a query that returns nothing or is not running. Pass id.", [new AgentToolArgument("id", true)]),
-        new(DiagnoseSourceTool, "Status, reported labels, and a short live log window for a configured source. Pass id. expectLabels is an optional comma-separated list.", [new AgentToolArgument("id", true), new AgentToolArgument("expectLabels", false)]),
+        new(DiagnoseSourceTool, "Status, labels, and a short live log window for a configured source. Pass id. expectLabels is optional and is compared with labels from the source schema API.", [new AgentToolArgument("id", true), new AgentToolArgument("expectLabels", false)]),
         new(WatchQueryTool, "Capture add, update, and delete diffs a query emits during a short live window. Pass queryId. This observes the source; it cannot insert rows.", [new AgentToolArgument("queryId", true), new AgentToolArgument("durationMs", false)]),
         new(TailLogsTool, "Read a short live log window for a source or query. Pass target as source or query, and id. level and contains are optional.", [new AgentToolArgument("target", true), new AgentToolArgument("id", true), new AgentToolArgument("level", false), new AgentToolArgument("contains", false)]),
-        new(GetQueryMetricsTool, "Return live result count and whether the query is emitting. Pass id. A live count of 0 means nothing matched.", [new AgentToolArgument("id", true)]),
+        new(GetQueryMetricsTool, "Return live result count and whether the query is emitting. Pass id. A count of 0 means no row matches yet.", [new AgentToolArgument("id", true)]),
         new(ListSourcesTool, "List configured source ids and status. Connection settings are not included.", (string?)null),
     ];
+
+    public async Task<string?> CoverageGapAsync(string queryId, string callerText, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return null;
+        var labels = (await SchemaLabelsAsync(cancellationToken))
+            .Where(label => Mentions(callerText, label))
+            .ToArray();
+        if (labels.Length == 0)
+            return null;
+        var authored = await store.FindAsync(new QueryId(queryId), cancellationToken);
+        var covered = authored?.Cypher
+            ?? (catalog.Catalog.Queries.TryGetValue(new QueryId(queryId), out var item)
+                ? item.Description + " " + string.Join(" ", item.Examples)
+                : null);
+        if (covered is null)
+            return null;
+        var missing = labels.Where(label => !covered.Contains(label, StringComparison.OrdinalIgnoreCase)).ToArray();
+        return missing.Length == 0
+            ? null
+            : $"Query '{queryId}' does not cover {string.Join(", ", missing)}. It is only part of the request. Build a new query that includes those labels, commit it, then subscribe to the new id. Do not reuse the narrower query.";
+    }
+
+    private static bool Mentions(string text, string label)
+    {
+        if (Regex.IsMatch(text, $@"\b{Regex.Escape(label)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return true;
+        return label.Length > 4 &&
+            label.EndsWith('s') &&
+            Regex.IsMatch(text, $@"\b{Regex.Escape(label[..^1])}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
 
     public Task<string> InvokeAsync(
         string name,
@@ -95,8 +128,15 @@ public sealed class QueryWorkbench(
     private async Task<string> SourceSchemaAsync(IReadOnlyDictionary<string, string?>? arguments, CancellationToken cancellationToken)
     {
         var id = RequireSource(arguments);
-        var schema = await runtime.SourceSchemaAsync(id, cancellationToken);
-        return JsonSerializer.Serialize(new { Kind = "source_schema", Id = id, Described = schema is not null, Schema = schema }, Json);
+        var reported = await runtime.SourceSchemaAsync(id, cancellationToken);
+        return JsonSerializer.Serialize(new
+        {
+            Kind = "source_schema",
+            Id = id,
+            Described = reported is not null,
+            Method = reported is not null ? "reported" : "none",
+            Schema = reported,
+        }, Json);
     }
 
     private async Task<string> GraphSchemaAsync(CancellationToken cancellationToken)
@@ -133,7 +173,7 @@ public sealed class QueryWorkbench(
                 Id = id,
                 Method = "none",
                 Schema = reported,
-                Note = "The source did not report labels. Pass sampleLabels to sample rows.",
+                Note = "The source schema did not report labels. Do not invent them.",
             }, Json);
         }
 
@@ -162,7 +202,7 @@ public sealed class QueryWorkbench(
             Method = reported is null ? "sampled" : "described_and_sampled",
             Schema = reported,
             Nodes = sampled,
-            Hint = "examples shows real values. Filter on the exact value and casing.",
+            Hint = "Examples are stored values from current rows. Use one of those exact strings. Do not paraphrase the caller.",
         }, Json);
     }
 
@@ -276,7 +316,7 @@ public sealed class QueryWorkbench(
             Verdict = healthy ? "healthy" : "problem",
             Hint = healthy
                 ? "The source is running and the expected labels are visible."
-                : "A running status does not prove rows were loaded. Check missing labels and error lines, then sample with profile_source_schema.",
+                : "A running status does not prove rows were loaded. Check missing labels from the source schema and error lines.",
         }, Json);
     }
 
@@ -392,10 +432,70 @@ public sealed class QueryWorkbench(
         arguments is not null && arguments.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value
             : null;
+
+    private async Task<IReadOnlyList<string>> SchemaLabelsAsync(CancellationToken cancellationToken)
+    {
+        var labels = new List<string>();
+        foreach (var id in sourceIds.OrderBy(item => item, StringComparer.Ordinal))
+        {
+            var schema = await runtime.SourceSchemaAsync(id, cancellationToken);
+            if (schema?["nodes"] is not JsonArray nodes)
+                continue;
+            foreach (var node in nodes)
+            {
+                var label = node?["label"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(label))
+                    labels.Add(label);
+            }
+        }
+
+        return labels.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
 }
 
 public static class QuerySamples
 {
+    private static readonly Regex ElementLabels = new(
+        "labels:\\s*\\[(?<labels>[^\\]]*)\\]",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex QuotedLabel = new(
+        "\"(?<label>[A-Za-z_][A-Za-z0-9_]*)\"",
+        RegexOptions.CultureInvariant);
+
+    public static IReadOnlyList<string> Labels(IReadOnlyList<JsonNode> rows)
+    {
+        var labels = new List<string>();
+        foreach (var row in rows)
+            CollectLabels(row, labels);
+        return labels;
+    }
+
+    private static void CollectLabels(JsonNode? node, List<string> labels)
+    {
+        switch (node)
+        {
+            case JsonValue value when value.TryGetValue<string>(out var text):
+                foreach (Match match in ElementLabels.Matches(text))
+                {
+                    foreach (Match quoted in QuotedLabel.Matches(match.Groups["labels"].Value))
+                    {
+                        var label = quoted.Groups["label"].Value;
+                        if (!labels.Contains(label, StringComparer.Ordinal))
+                            labels.Add(label);
+                    }
+                }
+                break;
+            case JsonObject obj:
+                foreach (var property in obj)
+                    CollectLabels(property.Value, labels);
+                break;
+            case JsonArray array:
+                foreach (var item in array)
+                    CollectLabels(item, labels);
+                break;
+        }
+    }
+
     public static IReadOnlyList<string> PropertyNames(IReadOnlyList<JsonNode> rows)
     {
         var names = new List<string>();
@@ -403,6 +503,23 @@ public static class QuerySamples
         {
             foreach (var property in Element(row))
             {
+                if (!names.Contains(property.Key, StringComparer.Ordinal))
+                    names.Add(property.Key);
+            }
+        }
+
+        return names;
+    }
+
+    public static IReadOnlyList<string> NodeProperties(IReadOnlyList<JsonNode> rows)
+    {
+        var names = new List<string>();
+        foreach (var row in rows)
+        {
+            foreach (var property in Element(row))
+            {
+                if (property.Value is JsonObject or JsonArray)
+                    continue;
                 if (!names.Contains(property.Key, StringComparer.Ordinal))
                     names.Add(property.Key);
             }
@@ -446,7 +563,37 @@ public static class QuerySamples
             yield break;
         }
 
+        var expanded = false;
+        foreach (var property in obj)
+        {
+            if (property.Value is not JsonValue value ||
+                !value.TryGetValue<string>(out var text) ||
+                !TryElementProperties(text, out var properties))
+                continue;
+            expanded = true;
+            foreach (var parsed in properties)
+                yield return parsed;
+        }
+
+        if (expanded)
+            yield break;
+
         foreach (var property in obj)
             yield return property;
     }
+
+    private static bool TryElementProperties(string text, out List<KeyValuePair<string, JsonNode?>> properties)
+    {
+        properties = [];
+        var start = text.IndexOf("values:", StringComparison.Ordinal);
+        if (start < 0 || !text.Contains("ElementPropertyMap", StringComparison.Ordinal))
+            return false;
+        foreach (Match match in ElementProperty.Matches(text[start..]))
+            properties.Add(new(match.Groups[1].Value, JsonValue.Create(match.Groups[2].Value)));
+        return properties.Count > 0;
+    }
+
+    private static readonly Regex ElementProperty = new(
+        "\"([A-Za-z_][A-Za-z0-9_]*)\"\\s*:\\s*String\\(\"([^\"]*)\"\\)",
+        RegexOptions.CultureInvariant);
 }

@@ -47,19 +47,22 @@ public sealed class AgentToolSession : IAgentTools
     private readonly Principal _principal;
     private readonly TaskTurnId _turn;
     private readonly CancellationToken _cancellationToken;
+    private readonly string? _callerText;
 
     private AgentToolSession(
         IConversationSubscriptions commands,
         Principal principal,
         TaskTurnId turn,
         CancellationToken cancellationToken,
-        IQueryWorkbench? workbench)
+        IQueryWorkbench? workbench,
+        string? callerText)
     {
         _commands = commands;
         _workbench = workbench;
         _principal = principal;
         _turn = turn;
         _cancellationToken = cancellationToken;
+        _callerText = callerText;
         var tools = new List<AgentTool>
         {
             new(AgentTurn.SubscribeTool, AgentTurn.SubscribeToolDescription, "query"),
@@ -80,8 +83,9 @@ public sealed class AgentToolSession : IAgentTools
         Principal principal,
         TaskTurnId turn,
         CancellationToken cancellationToken,
-        IQueryWorkbench? workbench = null) =>
-        new(commands, principal, turn, cancellationToken, workbench);
+        IQueryWorkbench? workbench = null,
+        string? callerText = null) =>
+        new(commands, principal, turn, cancellationToken, workbench, callerText);
 
     public Task<string> InvokeAsync(string name, IReadOnlyDictionary<string, string?>? arguments = null)
     {
@@ -101,10 +105,15 @@ public sealed class AgentToolSession : IAgentTools
         };
     }
 
-    private async Task<string> SubscribeAsync(string query) =>
-        await InvokeAsync(new SubscribeToQuery(
+    private async Task<string> SubscribeAsync(string query)
+    {
+        if (_workbench is not null && !string.IsNullOrWhiteSpace(_callerText) &&
+            await _workbench.CoverageGapAsync(query, _callerText, _cancellationToken) is { } gap)
+            return Rejected("query_rejected", gap);
+        return await InvokeAsync(new SubscribeToQuery(
             new QueryId(query),
             new SubscriptionRequestKey($"a2a:{_turn.TaskId}:{_turn.MessageId}:request")));
+    }
 
     private async Task<string> WorkbenchAsync(string name, IReadOnlyDictionary<string, string?>? arguments)
     {
@@ -112,7 +121,7 @@ public sealed class AgentToolSession : IAgentTools
             return Rejected("invalid_tool_arguments", "The tool name is not valid.");
         try
         {
-            return await _workbench.InvokeAsync(name, arguments, _cancellationToken);
+            return await _workbench.InvokeAsync(name, WithCallerText(name, arguments), _cancellationToken);
         }
         catch (SentinelException exception) when (IsRecoverable(exception))
         {
@@ -136,6 +145,21 @@ public sealed class AgentToolSession : IAgentTools
         {
             return Rejected(exception.Code, exception.Message);
         }
+    }
+
+    private IReadOnlyDictionary<string, string?>? WithCallerText(
+        string name,
+        IReadOnlyDictionary<string, string?>? arguments)
+    {
+        if (string.IsNullOrWhiteSpace(_callerText) || name is not (
+            QueryWorkbench.TestQueryTool or
+            QueryWorkbench.GenerateQueryTool or
+            QueryWorkbench.AddQueryTool or
+            QueryWorkbench.UpdateQueryTool))
+            return arguments;
+        var copy = new Dictionary<string, string?>(arguments ?? new Dictionary<string, string?>(), StringComparer.Ordinal);
+        copy["caller_text"] = _callerText;
+        return copy;
     }
 
     private static string? Argument(IReadOnlyDictionary<string, string?>? arguments, string name) =>
@@ -179,11 +203,11 @@ public sealed class AgentToolSession : IAgentTools
         State = subscription.State.ToString(),
     };
 
-    private static string Rejected(string code, string message) => JsonSerializer.Serialize(new
+    private string Rejected(string code, string message) => JsonSerializer.Serialize(new
     {
         Kind = AgentTurn.ToolRejectedKind,
         Code = code,
         Message = message,
-        Next = AgentTurn.Recovery(code),
+        Next = AgentTurn.Recovery(code, _workbench is not null),
     }, Json);
 }

@@ -7,7 +7,8 @@ query, attaches the native reaction, and appends a subscription artifact. A
 query with zero or many reactions does not load. An unknown query returns a
 tool result and does not fail the task. If `service.query_authoring.enabled`
 is true, the catalog has exactly one reaction and the model may test and commit
-a Cypher query against those sources. The committed query is stored, registered
+a Cypher query against those sources. A filter that matches no current rows can
+still be committed when it is the value the caller asked to watch. The committed query is stored, registered
 on the engine at startup, and then subscribed like any other catalog query.
 The model does not receive source connection settings. The application owns the turn
 instructions, governed tools, and `ILanguageModel` port. A model provider

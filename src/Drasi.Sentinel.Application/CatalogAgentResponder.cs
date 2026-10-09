@@ -17,7 +17,7 @@ public sealed class CatalogAgentResponder(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken, workbench);
+        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken, workbench, input);
         return model.CompleteAsync(
             AgentTurn.Render(catalog, authoringPrompt),
             tools,

@@ -137,6 +137,21 @@ public sealed class QueryAuthoring(
     };
 
     private static readonly Regex Identifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
+    private static readonly Regex VariableLabel = new(
+        @"\(\s*(?<variable>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?<label>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex CrossEquality = new(
+        @"\b(?<leftVar>[A-Za-z_][A-Za-z0-9_]*)\.(?<leftProp>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?<rightVar>[A-Za-z_][A-Za-z0-9_]*)\.(?<rightProp>[A-Za-z_][A-Za-z0-9_]*)",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex RelationshipType = new(
+        @"\[:\s*(?<id>[A-Za-z_][A-Za-z0-9_]*)\s*\]",
+        RegexOptions.CultureInvariant);
+    private static readonly Regex DurationRequest = new(
+        @"\b(\d+)\s+(second|minute|hour)s?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex LiteralEquality = new(
+        @"\b(?<variable>[A-Za-z_][A-Za-z0-9_]*)\.(?<property>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*'(?<literal>[^']*)'",
+        RegexOptions.CultureInvariant);
     private static readonly Regex QueryIdPattern = new("^[a-z][a-z0-9-]{1,63}$", RegexOptions.CultureInvariant);
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan UnfilteredTimeout = TimeSpan.FromSeconds(3);
@@ -200,14 +215,37 @@ public sealed class QueryAuthoring(
                 unfiltered = await ProbeUnfilteredAsync(query, sources, joins, cancellationToken);
         }
 
+        var joinSkip = JoinSkipReason(query, joins, analysis);
+        var callerText = Optional(arguments, "caller_text");
+        var durationSkip = DurationSkip(query, callerText);
+        var literalSkip = analysis.Blocking.Count == 0
+            ? await SampledLiteralSkipAsync(query, sources, callerText, cancellationToken)
+            : null;
+        var projectionSkip = ProjectionSkip(query, graph);
         string? skipped = null;
         string? committed = null;
         if (commitAs is not null)
         {
             skipped = await TryCommitAsync(
-                commitAs, description, query, sources, joins, analysis, probe, unfiltered, cancellationToken);
+                commitAs, description, query, sources, joins, analysis, probe, callerText, literalSkip, projectionSkip, cancellationToken);
             if (skipped is null)
                 committed = commitAs;
+        }
+        else if (joinSkip is not null)
+        {
+            skipped = joinSkip;
+        }
+        else if (literalSkip is not null)
+        {
+            skipped = literalSkip;
+        }
+        else if (durationSkip is not null)
+        {
+            skipped = durationSkip;
+        }
+        else if (projectionSkip is not null)
+        {
+            skipped = projectionSkip;
         }
 
         return JsonSerializer.Serialize(new
@@ -237,7 +275,7 @@ public sealed class QueryAuthoring(
             Unfiltered = unfiltered is null ? null : new { PerLabel = unfiltered.Counts },
             Committed = committed is null ? null : new { Id = committed },
             CommitSkippedReason = skipped,
-            Hint = Hint(probe, unfiltered),
+            Hint = joinSkip ?? literalSkip ?? durationSkip ?? projectionSkip ?? Hint(probe, unfiltered),
         }, Json);
     }
 
@@ -254,6 +292,50 @@ public sealed class QueryAuthoring(
         var description = Optional(arguments, "description")?.Trim() ?? existing.Description;
         var graph = await runtime.DescribeAsync(cancellationToken);
         var analysis = QueryText.Examine(query, graph, joins.Select(join => join.Id).ToArray());
+        if (DurationSkip(query, Optional(arguments, "caller_text")) is { } durationSkip)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = durationSkip,
+                Hint = durationSkip,
+            }, Json);
+        }
+
+        if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = joinSkip,
+                Hint = joinSkip,
+            }, Json);
+        }
+
+        if (await SampledLiteralSkipAsync(query, sources, Optional(arguments, "caller_text"), cancellationToken) is { } literalSkip)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = literalSkip,
+                Hint = literalSkip,
+            }, Json);
+        }
+
+        if (ProjectionSkip(query, graph) is { } projectionSkip)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = projectionSkip,
+                Hint = projectionSkip,
+            }, Json);
+        }
+
         if (analysis.Blocking.Count > 0 || analysis.UnknownLabels.Count > 0)
         {
             return JsonSerializer.Serialize(new
@@ -268,19 +350,14 @@ public sealed class QueryAuthoring(
         }
 
         var probe = await runtime.ProbeAsync(query, sources, joins, ProbeTimeout, cancellationToken);
-        UnfilteredProbe? unfiltered = null;
-        if (probe.Ok && probe.Rows.Count == 0 && query.Contains("WHERE", StringComparison.OrdinalIgnoreCase))
-            unfiltered = await ProbeUnfilteredAsync(query, sources, joins, cancellationToken);
-        if (!probe.Ok || unfiltered is { HasData: true })
+        if (!probe.Ok)
         {
             return JsonSerializer.Serialize(new
             {
                 Kind = "query_attempt",
                 Query = query,
                 Test = new { Ran = true, probe.Ok, RowCount = probe.Rows.Count, Rows = probe.Rows.Take(50).ToArray(), probe.Error },
-                CommitSkippedReason = unfiltered is { HasData: true }
-                    ? "The filter matched no rows, but the label has data. Fix the literal or join before updating."
-                    : probe.Error,
+                CommitSkippedReason = probe.Error,
             }, Json);
         }
 
@@ -298,19 +375,31 @@ public sealed class QueryAuthoring(
         IReadOnlyList<QueryJoinSpec> joins,
         QueryAnalysis analysis,
         QueryProbe? probe,
-        UnfilteredProbe? unfiltered,
+        string? callerText,
+        string? literalSkip,
+        string? projectionSkip,
         CancellationToken cancellationToken)
     {
         if (!QueryIdPattern.IsMatch(commitAs) || commitAs.StartsWith("probe", StringComparison.Ordinal))
             throw new SentinelException("query_rejected", "commit_as must be a lowercase id of letters, digits, and hyphens, and must not start with probe.");
         if (analysis.Blocking.Count > 0)
             return string.Join(" | ", analysis.Blocking);
+        if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
+            return joinSkip;
         if (analysis.UnknownLabels.Count > 0)
             return $"Unknown label: {string.Join(", ", analysis.UnknownLabels)}.";
+        if (analysis.UnknownProperties.Count > 0)
+            return $"Unknown property: {string.Join(", ", analysis.UnknownProperties)}. Use a property name from the schema.";
+        if (DurationSkip(query, callerText) is { } durationSkip)
+            return durationSkip;
+        if (literalSkip is not null)
+            return literalSkip;
+        if (AggregationOnly(query, callerText) is { } aggregation)
+            return aggregation;
+        if (projectionSkip is not null)
+            return projectionSkip;
         if (probe is not { Ok: true })
             return probe?.Error ?? "The query was not tested.";
-        if (unfiltered is { HasData: true })
-            return "The filter matched no rows, but the label has data. Fix the literal or join before committing.";
 
         var id = new QueryId(commitAs);
         var authored = new AuthoredQuery(id, description ?? "", query, sources, joins);
@@ -503,8 +592,258 @@ public sealed class QueryAuthoring(
         if (probe is not { Ok: true, Rows.Count: 0 })
             return null;
         return unfiltered is { HasData: true }
-            ? "The filter matched no rows, but the label has data. Comparison is case-sensitive and exact. Check the literal or a missing join before reporting that nothing was found."
+            ? "The filter matched no current rows, but the label has data. Comparison is case-sensitive. If the literal is a case or spelling mismatch of a profiled example, fix it. If it is the future value the caller asked to watch, commit and subscribe. Do not report that nothing was found."
             : "The test returned no rows. A commit can still watch for later rows when the unfiltered query is also empty.";
+    }
+
+    private async Task<string?> SampledLiteralSkipAsync(
+        string query,
+        IReadOnlyList<string> sources,
+        string? callerText,
+        CancellationToken cancellationToken)
+    {
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match match in VariableLabel.Matches(query))
+            variables[match.Groups["variable"].Value] = match.Groups["label"].Value;
+        var samples = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>(StringComparer.Ordinal);
+        var problems = new List<string>();
+        var named = new List<string>();
+        foreach (Match match in LiteralEquality.Matches(query))
+        {
+            var variable = match.Groups["variable"].Value;
+            var property = match.Groups["property"].Value;
+            var literal = match.Groups["literal"].Value;
+            if (!variables.TryGetValue(variable, out var label) || !Identifier.IsMatch(label))
+                continue;
+            if (!samples.TryGetValue(label, out var properties))
+            {
+                properties = await SampleLabelAsync(label, sources, cancellationToken);
+                samples[label] = properties;
+            }
+
+            if (!properties.TryGetValue(property, out var examples) || examples.Count == 0)
+                continue;
+            if (examples.Contains(literal, StringComparer.Ordinal))
+                continue;
+            var exactCase = examples.FirstOrDefault(example => example.Equals(literal, StringComparison.OrdinalIgnoreCase));
+            if (exactCase is not null)
+            {
+                problems.Add($"'{literal}' is not the stored spelling of {label}.{property}. Use '{exactCase}'.");
+                continue;
+            }
+
+            if (!IsNearMiss(literal, examples))
+                continue;
+            problems.Add(
+                $"'{literal}' is not a stored {label}.{property} value. Stored values: {string.Join(", ", examples)}. Use one of those exact strings.");
+        }
+
+        foreach (var label in variables.Values.Distinct(StringComparer.Ordinal))
+        {
+            if (!Identifier.IsMatch(label) || samples.ContainsKey(label))
+                continue;
+            samples[label] = await SampleLabelAsync(label, sources, cancellationToken);
+        }
+
+        foreach (var example in samples.Values.SelectMany(properties => properties.Values).SelectMany(values => values).Distinct(StringComparer.Ordinal))
+        {
+            if (NamesStoredValue(callerText, example) && !query.Contains($"'{example}'", StringComparison.Ordinal))
+                named.Add(example);
+        }
+
+        if (named.Count > 0)
+            problems.Add($"The caller named stored values missing from the query: {string.Join(", ", named)}. Filter with those exact strings.");
+        return problems.Count == 0
+            ? null
+            : string.Join(" ", problems) + " Commit again with a stored value.";
+    }
+
+    private static string? ProjectionSkip(string query, SourceGraph graph)
+    {
+        var returns = Regex.Match(query, @"\bRETURN\b(?<projection>.+)$", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.CultureInvariant);
+        if (!returns.Success)
+            return null;
+        var projection = returns.Groups["projection"].Value;
+        var aggregatedOnly = Regex.IsMatch(projection, @"\b(count|sum|avg|min|max|collect)\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            && !Regex.IsMatch(projection, @"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b");
+        if (aggregatedOnly)
+            return null;
+        var missing = new List<string>();
+        foreach (var label in QueryText.NodeLabels(query))
+        {
+            var node = graph.Nodes.FirstOrDefault(item => item.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
+            if (node is null)
+                continue;
+            foreach (var property in node.Properties)
+            {
+                if (!Regex.IsMatch(projection, $@"\b{Regex.Escape(property.Name)}\b", RegexOptions.CultureInvariant))
+                    missing.Add($"{label}.{property.Name}");
+            }
+        }
+
+        return missing.Count == 0
+            ? null
+            : $"RETURN is missing {string.Join(", ", missing)}. Project every schema property for each matched label. Do not project the node variable. Commit again in this turn.";
+    }
+
+    private static string? AggregationOnly(string query, string? callerText)
+    {
+        if (string.IsNullOrWhiteSpace(callerText) ||
+            Regex.IsMatch(callerText, @"\b(count|how many|number of|total)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return null;
+        var returns = Regex.Match(query, @"\bRETURN\b(?<projection>.+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!returns.Success)
+            return null;
+        var projection = returns.Groups["projection"].Value;
+        var aggregated = Regex.IsMatch(projection, @"\b(count|sum|avg|min|max|collect)\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        var projectedProperty = Regex.IsMatch(projection, @"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b");
+        return aggregated && !projectedProperty
+            ? "The caller asked to be told about a row, not a count. RETURN the identifying properties. Do not return only an aggregation. Commit again in this turn."
+            : null;
+    }
+
+    private static bool NamesStoredValue(string? text, string example)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+        if (Regex.IsMatch(text, $@"\b{Regex.Escape(example)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return true;
+        foreach (Match word in Regex.Matches(text, @"\b[A-Za-z][A-Za-z0-9]{3,}\b"))
+        {
+            if (example.StartsWith(word.Value, StringComparison.OrdinalIgnoreCase) && example.Length > word.Value.Length)
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> SampleLabelAsync(
+        string label,
+        IReadOnlyList<string> sources,
+        CancellationToken cancellationToken)
+    {
+        var merged = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var source in sources)
+        {
+            var probe = await runtime.ProbeAsync($"MATCH (n:{label}) RETURN n", [source], [], UnfilteredTimeout, cancellationToken);
+            if (!probe.Ok)
+                continue;
+            foreach (var pair in QuerySamples.Examples(probe.Rows))
+            {
+                if (!merged.TryGetValue(pair.Key, out var values))
+                    merged[pair.Key] = values = [];
+                foreach (var value in pair.Value.Select(StringValue).Where(value => value is not null).Cast<string>())
+                {
+                    if (!values.Contains(value, StringComparer.Ordinal) && values.Count < 8)
+                        values.Add(value);
+                }
+            }
+        }
+
+        return merged.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<string>)pair.Value,
+            StringComparer.Ordinal);
+    }
+
+    private static string? StringValue(JsonNode node) =>
+        node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+
+    private static bool IsNearMiss(string literal, IReadOnlyList<string> examples)
+    {
+        var tokens = Regex.Split(literal, "[^A-Za-z0-9]+")
+            .Where(token => token.Length > 0)
+            .ToArray();
+        foreach (var example in examples)
+        {
+            if (tokens.Any(token => token.Equals(example, StringComparison.OrdinalIgnoreCase)))
+                return true;
+            if (literal.Length >= 4 &&
+                example.StartsWith(literal, StringComparison.OrdinalIgnoreCase) &&
+                example.Length > literal.Length)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string? DurationSkip(string query, string? callerText)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return null;
+        var match = DurationRequest.Match(callerText);
+        if (!match.Success)
+            return null;
+        var amount = match.Groups[1].Value;
+        var key = match.Groups[2].Value.ToLowerInvariant() switch
+        {
+            "second" => "seconds",
+            "minute" => "minutes",
+            "hour" => "hours",
+            var unit => unit,
+        };
+        if (!query.Contains("trueFor", StringComparison.OrdinalIgnoreCase))
+            return $"The caller asked for a condition that must hold for {amount} {key}. Use drasi.trueFor(<that condition>, duration({{ {key}: {amount} }})). A WHERE comparison does not wait. Commit again in this turn.";
+        return Regex.IsMatch(
+            query,
+            $@"duration\s*\(\s*\{{\s*{key}\s*:\s*{amount}\s*\}}",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            ? null
+            : $"drasi.trueFor must use duration({{ {key}: {amount} }}), the duration the caller asked for. Commit again in this turn.";
+    }
+
+    private static string? JoinSkipReason(string query, IReadOnlyList<QueryJoinSpec> joins, QueryAnalysis analysis)
+    {
+        if (joins.Count == 0 &&
+            analysis.Warnings.FirstOrDefault(warning => warning.Contains("declares no joins", StringComparison.Ordinal)) is { } missingJoin)
+            return missingJoin + " " + JoinRepair(query);
+        if (joins.Count == 0 &&
+            analysis.UnknownLabels.FirstOrDefault(label => RelationshipIds(query).Contains(label, StringComparer.Ordinal)) is { } relationship)
+            return $"'{relationship}' is a join id, not a node label. " + JoinRepair(query);
+        var unused = joins.FirstOrDefault(join => !query.Contains(":" + join.Id, StringComparison.Ordinal));
+        return unused is null
+            ? null
+            : $"joins id {unused.Id} must appear in MATCH as -[:{unused.Id}]->. A comma or second MATCH does not use the join. Rewrite MATCH and commit again in this turn.";
+    }
+
+    private static string JoinRepair(string query)
+    {
+        var variables = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match match in VariableLabel.Matches(query))
+            variables[match.Groups["variable"].Value] = match.Groups["label"].Value;
+        var id = RelationshipIds(query).FirstOrDefault() ?? "LINK";
+        foreach (Match match in CrossEquality.Matches(query))
+        {
+            var leftVar = match.Groups["leftVar"].Value;
+            var rightVar = match.Groups["rightVar"].Value;
+            if (leftVar.Equals(rightVar, StringComparison.Ordinal))
+                continue;
+            if (!variables.TryGetValue(leftVar, out var leftLabel) || !variables.TryGetValue(rightVar, out var rightLabel))
+                continue;
+            if (leftLabel.Equals(rightLabel, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var leftProp = match.Groups["leftProp"].Value;
+            var rightProp = match.Groups["rightProp"].Value;
+            return $"Pass joins as [{{\"id\":\"{id}\",\"keys\":[{{\"label\":\"{leftLabel}\",\"property\":\"{leftProp}\"}},{{\"label\":\"{rightLabel}\",\"property\":\"{rightProp}\"}}]}}] and rewrite MATCH to ({leftVar}:{leftLabel})-[:{id}]->({rightVar}:{rightLabel}). Do not use a comma or a second MATCH. Commit again in this turn.";
+        }
+
+        var labels = QueryText.NodeLabels(query);
+        return labels.Count >= 2
+            ? $"Pass joins for the shared property between {labels[0]} and {labels[1]} and MATCH (a:{labels[0]})-[:{id}]->(b:{labels[1]}). A comma or second MATCH does not join. Commit again in this turn."
+            : "Declare joins and MATCH the synthetic relationship. A comma or second MATCH does not join. Commit again in this turn.";
+    }
+
+    private static IReadOnlyList<string> RelationshipIds(string query)
+    {
+        var ids = new List<string>();
+        foreach (Match match in RelationshipType.Matches(query))
+        {
+            var id = match.Groups["id"].Value;
+            if (!ids.Contains(id, StringComparer.Ordinal))
+                ids.Add(id);
+        }
+
+        return ids;
     }
 
     private sealed record LabelCount(string Label, int Count);

@@ -25,7 +25,7 @@ public sealed class QueryAuthoringCoverageTests
         Assert.Equal("payments", payments.RootElement.GetProperty("Schema").GetProperty("nodes")[0].GetProperty("label").GetString());
 
         var joins = """[{"id":"PAID_BY","keys":[{"label":"orders","property":"id"},{"label":"payments","property":"order_id"}]}]""";
-        var cypher = "MATCH (o:orders)-[:PAID_BY]->(p:payments) WHERE o.status = 'open' RETURN o.id AS id";
+        var cypher = "MATCH (o:orders)-[:PAID_BY]->(p:payments) WHERE o.status = 'open' RETURN o.id AS id, o.status AS status, p.order_id AS order_id";
         var tested = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.TestQueryTool, new Dictionary<string, string?>
         {
             ["query"] = cypher,
@@ -64,7 +64,7 @@ public sealed class QueryAuthoringCoverageTests
         var alternate = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
         {
             ["id"] = "open-linked",
-            ["query"] = "MATCH (o:orders)-[:LINK]->(p:payments) RETURN o.id AS id",
+            ["query"] = "MATCH (o:orders)-[:LINK]->(p:payments) RETURN o.id AS id, o.status AS status, p.order_id AS order_id",
             ["sources"] = """["orders-db","payments-db"]""",
             ["joins"] = """{"Id":"LINK","Keys":["orders.id","payments.order_id"]}""",
             ["description"] = "Reports an order linked to a payment.",
@@ -84,7 +84,7 @@ public sealed class QueryAuthoringCoverageTests
         await tools.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
         {
             ["id"] = "open-paid",
-            ["query"] = "MATCH (o:orders)-[:PAID_BY]->(p:payments) RETURN o.id AS id",
+            ["query"] = "MATCH (o:orders)-[:PAID_BY]->(p:payments) RETURN o.id AS id, o.status AS status, p.order_id AS order_id",
             ["sources"] = "orders-db,payments-db",
             ["joins"] = joins,
             ["description"] = "Reports an order with a matching payment.",
@@ -121,7 +121,7 @@ public sealed class QueryAuthoringCoverageTests
         var updated = JsonDocument.Parse(await tools.InvokeAsync(QueryWorkbench.UpdateQueryTool, new Dictionary<string, string?>
         {
             ["id"] = "open-paid",
-            ["query"] = "MATCH (o:orders)-[:PAID_BY]->(p:payments) WHERE o.status = 'open' RETURN o.id AS id",
+            ["query"] = "MATCH (o:orders)-[:PAID_BY]->(p:payments) WHERE o.status = 'open' RETURN o.id AS id, o.status AS status, p.order_id AS order_id",
             ["sources"] = "orders-db,payments-db",
             ["joins"] = joins,
         }));

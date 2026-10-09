@@ -24,8 +24,8 @@ for expected in \
 	'CREATE PUBLICATION drasi_accounting_publication' \
 	'pg_create_logical_replication_slot' \
 	'REPLICA IDENTITY FULL' \
-	'postgres.connection-string' \
-	'postgres.password'
+	'secrets.json' \
+	'postgres-password'
 do
 	grep -F -- "$expected" "$BOOTSTRAP" >/dev/null
 done
@@ -121,21 +121,19 @@ done
 for expected in \
 	'port: 5432' \
 	'user: sentinel' \
-	'path: secrets/postgres.password'
+	'kind: Secret' \
+	'name: postgres-password'
 do
 	grep -F -- "$expected" "$EXAMPLE/sentinel.yaml" >/dev/null
 done
 
 for expected in \
-	'0.2.7' \
-	'ac123ecb01d4c86d290db391e30436a1c34123705a9b175a866ac40c0c7285d8' \
-	'0.2.10' \
-	'496c315e8c6611712fcfd4398bfbb8771d8765891a36932bbdf536333121b848' \
-	'sdk_version = "0.10.0"' \
-	'core_version = "0.5.7"' \
-	'lib_version = "0.8.9"'
+	'ref: source/postgres' \
+	'ref: bootstrap/postgres' \
+	'ref: secret-store/file' \
+	'secretStore:'
 do
-	grep -F -- "$expected" "$EXAMPLE/plugins.lock" >/dev/null
+	grep -F -- "$expected" "$EXAMPLE/sentinel.yaml" >/dev/null
 done
 
 python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' \

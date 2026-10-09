@@ -44,6 +44,10 @@ builder.Services.AddSingleton<DrasiNativeEngine>(services => new DrasiNativeEngi
     new DrasiTopology(
         "drasi-sentinel",
         manifest.Directory,
+        manifest.Plugins,
+        manifest.SecretStore is null
+            ? null
+            : new DrasiSecretStore(manifest.SecretStore.Kind, manifest.SecretStore.Configuration),
         manifest.ExecutableCatalog.Sources.Values
             .Select(source => new DrasiPluginSourceDefinition(
                 source.Id,
@@ -68,7 +72,8 @@ builder.Services.AddSingleton<IConversationSubscriptions>(services => new Conver
 if (manifest.QueryAuthoringEnabled)
 {
     var sourceIds = manifest.ExecutableCatalog.Sources.Keys.ToHashSet(StringComparer.Ordinal);
-    builder.Services.AddSingleton(new QueryAuthoringPrompt(sourceIds.OrderBy(id => id, StringComparer.Ordinal).ToArray()));
+    builder.Services.AddSingleton(new QueryAuthoringPrompt(
+        sourceIds.OrderBy(id => id, StringComparer.Ordinal).ToArray()));
     builder.Services.AddSingleton<IQueryAuthoring>(services => new QueryAuthoring(
         services.GetRequiredService<INativeQueryRuntime>(),
         services.GetRequiredService<IAuthoredQueryStore>(),

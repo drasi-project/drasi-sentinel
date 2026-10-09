@@ -61,6 +61,9 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
 {
     public List<AuthoredQuery> Added { get; } = [];
     public List<QueryProbeCall> Probes { get; } = [];
+    public JsonNode Row { get; set; } = JsonNode.Parse("""{"id":"1","status":"open"}""")!;
+    public Dictionary<string, JsonNode?> Schemas { get; } = new(StringComparer.Ordinal);
+    public bool FailCombinedProbes { get; set; }
 
     public Task<SourceGraph> DescribeAsync(CancellationToken cancellationToken) =>
         Task.FromResult(QueryAuthoringEvalSupport.Graph());
@@ -73,11 +76,13 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
         CancellationToken cancellationToken)
     {
         Probes.Add(new QueryProbeCall(cypher, sourceIds, joins));
-        if (cypher.Contains("'OPEN'", StringComparison.Ordinal))
+        if (FailCombinedProbes && sourceIds.Count > 1)
+            return Task.FromResult(new QueryProbe(false, [], "One source rejected the label."));
+        if (cypher.Contains("'OPEN'", StringComparison.Ordinal) || cypher.Contains("'shipped'", StringComparison.Ordinal))
             return Task.FromResult(new QueryProbe(true, [], null));
         var row = cypher.Contains("payments", StringComparison.Ordinal)
             ? JsonNode.Parse("""{"order_id":"1"}""")!
-            : JsonNode.Parse("""{"id":"1","status":"open"}""")!;
+            : Row.DeepClone();
         return Task.FromResult(new QueryProbe(true, [row], null));
     }
 
@@ -101,13 +106,17 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
         return Task.CompletedTask;
     }
 
-    public Task<JsonNode?> SourceSchemaAsync(string sourceId, CancellationToken cancellationToken) =>
-        Task.FromResult<JsonNode?>(sourceId switch
+    public Task<JsonNode?> SourceSchemaAsync(string sourceId, CancellationToken cancellationToken)
+    {
+        if (Schemas.TryGetValue(sourceId, out var schema))
+            return Task.FromResult(schema?.DeepClone());
+        return Task.FromResult<JsonNode?>(sourceId switch
         {
             "orders-db" => JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"id","type":"string"},{"name":"status","type":"string"}]}],"relations":[]}"""),
             "payments-db" => JsonNode.Parse("""{"nodes":[{"label":"payments","properties":[{"name":"order_id","type":"string"}]}],"relations":[]}"""),
             _ => null,
         });
+    }
 
     public Task<JsonNode> GraphSchemaAsync(CancellationToken cancellationToken) =>
         Task.FromResult<JsonNode>(JsonNode.Parse("""{"nodes":{"orders":{},"payments":{}},"relations":{},"sourcesWithoutSchema":[]}""")!);

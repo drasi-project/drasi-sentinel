@@ -36,6 +36,18 @@ The demo uses fixed local PostgreSQL settings: `127.0.0.1:5432`,
 database/user `sentinel`, password `sentinel-demo`. It starts the forked
 Inspector at `http://127.0.0.1:8081`.
 
+Run the local curbside demo:
+
+```bash
+cd examples/curbside-local-demo
+./demo.sh
+```
+
+That demo uses PostgreSQL on `127.0.0.1:5433`, MySQL on `127.0.0.1:3309`, and
+Inspector port `8083`. It starts those two sources and no queries. Plugin refs
+are declared in `sentinel.yaml` and installed on startup. The script prints
+the prompts that ask the agent to build each watch.
+
 ## Product constraints
 
 - A change watch is one durable A2A task with one curated subscription.

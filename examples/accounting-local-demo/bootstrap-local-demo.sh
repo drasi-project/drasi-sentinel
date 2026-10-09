@@ -10,8 +10,7 @@ readonly CONTAINER_LABEL_VALUE="accounting-local-demo"
 readonly POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16}"
 readonly POSTGRES_PORT=5432
 readonly POSTGRES_PASSWORD="sentinel-demo"
-readonly CONNECTION_STRING="$SECRETS_DIR/postgres.connection-string"
-readonly POSTGRES_PASSWORD_FILE="$SECRETS_DIR/postgres.password"
+readonly SECRETS_JSON="$SECRETS_DIR/secrets.json"
 
 fail() {
 	printf 'error: %s\n' "$*" >&2
@@ -90,12 +89,20 @@ wait_for_postgres() {
 write_postgres_files() {
 	(
 		umask 077
-		printf '%s\n' \
-			'Host=127.0.0.1;Port=5432;Database=sentinel;Username=sentinel;Password=sentinel-demo;SSL Mode=Disable' \
-			> "$CONNECTION_STRING"
-		printf '%s\n' "$POSTGRES_PASSWORD" > "$POSTGRES_PASSWORD_FILE"
+		SENTINEL_CONNECTION_STRING="Host=127.0.0.1;Port=$POSTGRES_PORT;Database=sentinel;Username=sentinel;Password=$POSTGRES_PASSWORD;SSL Mode=Disable" \
+			SENTINEL_POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+			python3 - "$SECRETS_JSON" <<'PY'
+import json, os, sys
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump({
+        "sentinel-connection-string": os.environ["SENTINEL_CONNECTION_STRING"],
+        "postgres-password": os.environ["SENTINEL_POSTGRES_PASSWORD"],
+    }, handle)
+    handle.write("\n")
+PY
 	)
-	chmod 600 "$CONNECTION_STRING" "$POSTGRES_PASSWORD_FILE"
+	chmod 600 "$SECRETS_JSON"
+	rm -f -- "$SECRETS_DIR/postgres.connection-string" "$SECRETS_DIR/postgres.password"
 }
 
 initialize_accounting_database() {
@@ -133,7 +140,7 @@ stop_demo() {
 		require_demo_container
 		docker rm -f "$CONTAINER_NAME" >/dev/null
 	fi
-	rm -f -- "$CONNECTION_STRING" "$POSTGRES_PASSWORD_FILE"
+	rm -f -- "$SECRETS_JSON" "$SECRETS_DIR/postgres.connection-string" "$SECRETS_DIR/postgres.password"
 	printf 'Stopped the local PostgreSQL container and removed this demo’s generated files.\n'
 }
 
@@ -170,7 +177,7 @@ start_demo() {
 Local accounting resources are ready.
 
 PostgreSQL listens only on 127.0.0.1:$POSTGRES_PORT. The owner-only
-postgres.connection-string and postgres.password files are in secrets/.
+secrets/secrets.json file holds the connection string and source password.
 
 The sentinel PostgreSQL user stores Sentinel's task and subscription state and
 is also used for PostgreSQL CDC. It runs with logical replication, an invoices

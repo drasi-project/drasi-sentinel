@@ -1,32 +1,39 @@
 agent:
   url: { env: AZURE_OPENAI_ENDPOINT }
   model: { env: AZURE_OPENAI_MODEL }
+plugins:
+  - ref: source/postgres
+  - ref: bootstrap/postgres
+  - ref: secret-store/file
+secretStore:
+  kind: file
+  path: secrets/secrets.json
 service:
   profile: production
   database:
-    kind: file
-    path: secrets/postgres.connection-string
+    kind: Secret
+    name: sentinel-connection-string
   a2a:
     authentication:
       mode: jwt
       issuer: https://issuer.example.test/
       audience: drasi-sentinel
       public_key:
-        kind: file
-        path: secrets/a2a-public-key.pem
+        kind: Secret
+        name: a2a-public-key
 sources:
   - id: invoices
     kind: postgres
     config:
       host: 127.0.0.1
       port:
-        kind: file
-        path: secrets/postgres.cdc-port
+        kind: Secret
+        name: postgres-cdc-port
       database: sentinel
       user: sentinel_cdc
       password:
-        kind: file
-        path: secrets/postgres.cdc-password
+        kind: Secret
+        name: postgres-cdc-password
       tables: [invoices]
       slotName: drasi_invoice_slot
       publicationName: drasi_invoice_publication
@@ -38,13 +45,13 @@ sources:
       kind: postgres
       host: 127.0.0.1
       port:
-        kind: file
-        path: secrets/postgres.cdc-port
+        kind: Secret
+        name: postgres-cdc-port
       database: sentinel
       user: sentinel_cdc
       password:
-        kind: file
-        path: secrets/postgres.cdc-password
+        kind: Secret
+        name: postgres-cdc-password
       tables: [invoices]
       slotName: drasi_invoice_slot
       publicationName: drasi_invoice_publication

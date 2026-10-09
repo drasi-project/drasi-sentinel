@@ -1,0 +1,5 @@
+secrets/*
+!secrets/.gitignore
+!secrets/*.example
+
+/libdrasi_*.dylib
