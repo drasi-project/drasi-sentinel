@@ -16,8 +16,13 @@ SSE IDs. Reconnect with `Last-Event-ID` to replay missed artifacts.
 
 ```bash
 dotnet test Drasi.Sentinel.slnx
+./tests/query-authoring-eval.sh
 dotnet run --project src/Drasi.Sentinel.Host -- sentinel.yaml
 ```
+
+`./tests/query-authoring-eval.sh` scores the query tools without a model. Set
+`SENTINEL_QUERY_EVAL=1` and the Azure OpenAI endpoint and model variables to
+also score that configured model. The default test run does not call it.
 
 The Agent Card is available at `/.well-known/agent-card.json`. It advertises
 `JSONRPC` with `capabilities.streaming: true`. Inspector v1 `ROLE_USER`

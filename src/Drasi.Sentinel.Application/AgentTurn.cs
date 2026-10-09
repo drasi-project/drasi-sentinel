@@ -82,7 +82,7 @@ public static class AgentTurn
         "If it does not match, and the caller described a change to detect, build one continuous query against the configured sources. " +
         "Call get_graph_schema and get_source_schema first. If a source has no schema, or before filtering on a value, call profile_source_schema and use the examples. Never guess labels, properties, or filter values. String comparison is case-sensitive and exact. " +
         "Queries are Cypher, not SQL. Start with MATCH (n:Label). Do not use SELECT, FROM, GROUP BY, JOIN ... ON, or ORDER BY. Aggregations use count, sum, avg, min, max, or collect in RETURN. " +
-        "A relational source has no relationship between labels. To relate two labels, pass joins and MATCH the synthetic relationship. A comma or multi-MATCH does not join. " +
+        "A relational source has no relationship between labels. To relate two labels, pass joins as [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}] and MATCH (a:LabelA)-[:LINK]->(b:LabelB). A comma or multi-MATCH does not join. " +
         "Call test_query or generate_query to test. If the filter matches no rows but the label has data, do not report that nothing was found and do not commit. Fix the literal or join. " +
         "If the query errors, returns nothing, or a watch does not fire, call diagnose_query, diagnose_source, get_query_metrics, get_query_results, tail_logs, and watch_query. Do not guess. " +
         "watch_query observes live diffs. It cannot insert rows. There is no tool to seed a configured source. " +

@@ -372,51 +372,83 @@ public sealed class QueryAuthoring(
 
     private IReadOnlyList<string> ParseSources(string text)
     {
-        var sources = text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var tokens = SourceTokens(text);
+        if (tokens.Count == 0)
+            throw new SentinelException("invalid_tool_arguments", "Pass at least one configured source id, comma-separated or as a JSON array.");
+        var unknown = tokens.FirstOrDefault(id => !sourceIds.Contains(id));
+        if (unknown is not null)
+            throw new SentinelException("source_unknown", $"Source '{unknown}' is not configured. Configured ids: {string.Join(", ", sourceIds.OrderBy(id => id, StringComparer.Ordinal))}.");
+        return tokens;
+    }
+
+    private static IReadOnlyList<string> SourceTokens(string text)
+    {
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith('[') || trimmed.StartsWith('{'))
+        {
+            try
+            {
+                var node = Unwrap(JsonNode.Parse(trimmed));
+                if (node is JsonArray array)
+                {
+                    return array.Select(SourceToken).Where(id => id is not null).Cast<string>()
+                        .Distinct(StringComparer.Ordinal).OrderBy(id => id, StringComparer.Ordinal).ToArray();
+                }
+
+                if (SourceToken(node) is { } single)
+                    return [single];
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
-        if (sources.Length == 0)
-            throw new SentinelException("invalid_tool_arguments", "Pass at least one source id.");
-        var unknown = sources.FirstOrDefault(id => !sourceIds.Contains(id));
-        if (unknown is not null)
-            throw new SentinelException("source_unknown", $"Source '{unknown}' is not configured.");
-        return sources;
     }
+
+    private static string? SourceToken(JsonNode? node) => node switch
+    {
+        JsonValue => node.GetValue<string>(),
+        JsonObject obj => Text(obj, "sourceId", "id"),
+        _ => null,
+    };
 
     private static IReadOnlyList<QueryJoinSpec> ParseJoins(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return [];
-        JsonArray array;
+        JsonNode? node;
         try
         {
-            array = JsonNode.Parse(text) as JsonArray
-                ?? throw new SentinelException("invalid_tool_arguments", "joins must be a JSON array.");
+            node = Unwrap(JsonNode.Parse(text));
         }
         catch (JsonException exception)
         {
-            throw new SentinelException("invalid_tool_arguments", "joins must be a JSON array.", exception);
+            throw new SentinelException("invalid_tool_arguments", JoinShape, exception);
         }
 
+        var array = node as JsonArray ?? (node is JsonObject ? new JsonArray(node.DeepClone()) : null);
+        if (array is null || array.Count == 0)
+            throw new SentinelException("invalid_tool_arguments", JoinShape);
         var joins = new List<QueryJoinSpec>();
         foreach (var item in array)
         {
             if (item is not JsonObject join)
-                throw new SentinelException("invalid_tool_arguments", "Each join needs an id and keys.");
-            var id = join["id"]?.GetValue<string>();
-            if (id is null || !Identifier.IsMatch(id) || join["keys"] is not JsonArray keys || keys.Count < 2)
-                throw new SentinelException("invalid_tool_arguments", "Each join needs an id and at least two keys.");
+                throw new SentinelException("invalid_tool_arguments", JoinShape);
+            var id = Text(join, "id");
+            var keys = Field(join, "keys") as JsonArray;
+            if (id is null || !Identifier.IsMatch(id) || keys is null || keys.Count < 2)
+                throw new SentinelException("invalid_tool_arguments", JoinShape);
             var parsedKeys = new List<QueryJoinKeySpec>();
             foreach (var key in keys)
             {
-                if (key is not JsonObject keyObject)
-                    throw new SentinelException("invalid_tool_arguments", "Each join key needs a label and property.");
-                var keyLabel = keyObject["label"]?.GetValue<string>();
-                var property = keyObject["property"]?.GetValue<string>();
-                if (keyLabel is null || property is null || !Identifier.IsMatch(keyLabel) || !Identifier.IsMatch(property))
-                    throw new SentinelException("invalid_tool_arguments", "Each join key needs a label and property.");
-                parsedKeys.Add(new QueryJoinKeySpec(keyLabel, property));
+                var parsed = ParseJoinKey(key);
+                if (parsed is null)
+                    throw new SentinelException("invalid_tool_arguments", JoinShape);
+                parsedKeys.Add(parsed);
             }
 
             joins.Add(new QueryJoinSpec(id, parsedKeys));
@@ -424,6 +456,42 @@ public sealed class QueryAuthoring(
 
         return joins;
     }
+
+    private static QueryJoinKeySpec? ParseJoinKey(JsonNode? key)
+    {
+        if (key is JsonValue && key.GetValue<string>() is { } dotted && dotted.Split('.', 2) is [var label, var property]
+            && Identifier.IsMatch(label) && Identifier.IsMatch(property))
+            return new QueryJoinKeySpec(label, property);
+        if (key is not JsonObject keyObject)
+            return null;
+        var keyLabel = Text(keyObject, "label");
+        var keyProperty = Text(keyObject, "property");
+        return keyLabel is not null && keyProperty is not null && Identifier.IsMatch(keyLabel) && Identifier.IsMatch(keyProperty)
+            ? new QueryJoinKeySpec(keyLabel, keyProperty)
+            : null;
+    }
+
+    private static JsonNode? Unwrap(JsonNode? node) =>
+        node is JsonValue && node.GetValue<string>() is { } inner && inner.TrimStart().StartsWith('[')
+            ? JsonNode.Parse(inner)
+            : node;
+
+    private static string? Text(JsonObject obj, params string[] names) =>
+        Field(obj, names) is JsonValue value ? value.GetValue<string>() : null;
+
+    private static JsonNode? Field(JsonObject obj, params string[] names)
+    {
+        foreach (var pair in obj)
+        {
+            if (names.Any(name => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                return pair.Value;
+        }
+
+        return null;
+    }
+
+    private const string JoinShape =
+        "joins must be a JSON array like [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}]. The id is the relationship type in MATCH (a)-[:LINK]->(b).";
 
     private static bool Same(AuthoredQuery existing, AuthoredQuery candidate) =>
         existing.Cypher == candidate.Cypher
