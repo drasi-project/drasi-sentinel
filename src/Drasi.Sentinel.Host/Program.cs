@@ -13,12 +13,12 @@ if (args.Length == 0)
 var manifest = SentinelManifestLoader.Load(args[0]);
 var builder = WebApplication.CreateBuilder(args[1..]);
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<PostgresSentinelRepository>(_ =>
-    PostgresSentinelRepository.Create(manifest.DatabaseConnectionString));
+builder.Services.AddSingleton<SqliteSentinelRepository>(_ =>
+    SqliteSentinelRepository.Create(SentinelDataDirectory.JournalPath(manifest.Directory, manifest.DataDirectory)));
 builder.Services.AddSingleton<IConversationRepository>(services =>
-    services.GetRequiredService<PostgresSentinelRepository>());
+    services.GetRequiredService<SqliteSentinelRepository>());
 builder.Services.AddSingleton<IAuthoredQueryStore>(services =>
-    services.GetRequiredService<PostgresSentinelRepository>());
+    services.GetRequiredService<SqliteSentinelRepository>());
 var liveCatalog = new LiveCatalog(manifest.SafeCatalog);
 builder.Services.AddSingleton(liveCatalog);
 builder.Services.AddSingleton<ITaskEventNotifier, TaskEventNotifier>();
@@ -58,18 +58,21 @@ builder.Services.AddSingleton<DrasiNativeEngine>(services => new DrasiNativeEngi
             .ToArray(),
         manifest.ExecutableCatalog.Queries.Values
             .Select(query => new DrasiQueryDefinition(query.Id, query.Cypher, query.SourceIds))
-            .ToArray()),
+            .ToArray(),
+        manifest.DataDirectory),
     services.GetRequiredService<INativeResultIngestion>()));
 builder.Services.AddSingleton<INativeEngine>(services =>
     services.GetRequiredService<DrasiNativeEngine>());
 builder.Services.AddSingleton<INativeQueryRuntime>(services =>
     services.GetRequiredService<DrasiNativeEngine>());
-builder.Services.AddSingleton<IConversationSubscriptions>(services => new ConversationSubscriptions(
+builder.Services.AddSingleton(services => new ConversationSubscriptions(
     liveCatalog.Catalog,
     services.GetRequiredService<INativeEngine>(),
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
     TimeProvider.System));
+builder.Services.AddSingleton<IConversationSubscriptions>(services =>
+    services.GetRequiredService<ConversationSubscriptions>());
 if (manifest.QueryAuthoringEnabled)
 {
     var sourceIds = manifest.ExecutableCatalog.Sources.Keys.ToHashSet(StringComparer.Ordinal);
@@ -108,23 +111,27 @@ else
 }
 
 var app = builder.Build();
-var engine = app.Services.GetRequiredService<INativeEngine>();
+var native = app.Services.GetRequiredService<DrasiNativeEngine>();
+INativeEngine engine = native;
 if (manifest.A2aAuthentication is A2aJwtManifest)
 {
     app.UseAuthentication();
     app.UseAuthorization();
 }
-await app.Services.GetRequiredService<PostgresSentinelRepository>()
+await app.Services.GetRequiredService<SqliteSentinelRepository>()
     .InitializeAsync(app.Lifetime.ApplicationStopping);
 _ = app.Services.GetRequiredService<NativeResultIngestion>()
     .RunAsync(app.Lifetime.ApplicationStopping);
-await engine.StartAsync(app.Lifetime.ApplicationStopping);
+await native.StartAsync(app.Lifetime.ApplicationStopping);
 await RestoreAuthoredQueriesAsync(
     app.Services.GetRequiredService<IAuthoredQueryStore>(),
-    app.Services.GetRequiredService<INativeQueryRuntime>(),
+    native,
     liveCatalog,
     manifest.SafeCatalog,
     app.Lifetime.ApplicationStopping);
+await app.Services.GetRequiredService<ConversationSubscriptions>()
+    .RestoreWatchesAsync(app.Lifetime.ApplicationStopping);
+await native.StartFeedsAsync(app.Lifetime.ApplicationStopping);
 app.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(
     () => engine.DisposeAsync().AsTask().GetAwaiter().GetResult());
 
@@ -150,7 +157,7 @@ app.Run();
 
 static async Task RestoreAuthoredQueriesAsync(
     IAuthoredQueryStore store,
-    INativeQueryRuntime runtime,
+    DrasiNativeEngine engine,
     LiveCatalog catalog,
     SafeCatalog seed,
     CancellationToken cancellationToken)
@@ -163,7 +170,7 @@ static async Task RestoreAuthoredQueriesAsync(
     var reaction = seed.Reactions.Keys.Single();
     foreach (var query in authored)
     {
-        await runtime.AddAsync(query, null, cancellationToken);
+        await engine.ProvisionAuthoredAsync(query, cancellationToken);
         if (!catalog.Catalog.Queries.ContainsKey(query.Id))
             catalog.Add(QueryAuthoring.ToCatalogItem(query, reaction));
     }

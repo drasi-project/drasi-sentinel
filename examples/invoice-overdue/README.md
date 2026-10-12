@@ -2,7 +2,7 @@
 
 This JWT-protected catalog reports overdue-invoice changes as artifacts on an
 A2A conversation task. Copy `secrets/secrets.json.example` to
-`secrets/secrets.json`, mode `0600`, fill in the connection string, CDC
+`secrets/secrets.json`, mode `0600`, fill in the CDC
 password, CDC port, and JWT public key, set the Azure OpenAI environment
 variables, then run:
 

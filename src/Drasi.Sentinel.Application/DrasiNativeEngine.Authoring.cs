@@ -108,6 +108,14 @@ public sealed partial class DrasiNativeEngine : INativeQueryRuntime
         }
     }
 
+    public async Task ProvisionAuthoredAsync(AuthoredQuery query, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var nativeId = NativeQueryId(query.Id);
+        await RequireEngine().AddQueryAsync(nativeId, query.Cypher, query.SourceIds, Options(query.Joins), cancellationToken);
+        _feedQueryIds.Add(nativeId);
+    }
+
     public async Task AddAsync(AuthoredQuery query, TimeSpan? readyTimeout, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(query);

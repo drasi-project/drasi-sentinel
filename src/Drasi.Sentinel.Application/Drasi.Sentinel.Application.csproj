@@ -2,11 +2,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Drasi.Sentinel.Domain\Drasi.Sentinel.Domain.csproj" />
+    <InternalsVisibleTo Include="Drasi.Sentinel.Tests" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Drasi" Version="0.1.0" />
-    <PackageReference Include="Npgsql" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.12" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -209,7 +209,7 @@ public sealed class SubscriptionInvariantTests
     }
 
     [Fact]
-    public async Task Native_diffs_append_complete_structured_data_without_deduplication()
+    public async Task Native_diffs_append_complete_structured_data_and_drop_an_identical_replay()
     {
         var (service, repository, principal) = await CreateAsync();
         var subscription = await Subscribe(service, principal, "task", "message", "request");
@@ -227,9 +227,9 @@ public sealed class SubscriptionInvariantTests
 
         var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 100, CancellationToken.None);
         var observations = events.Where(x => x.Kind == ConversationEventKind.Observation).ToArray();
-        Assert.Equal(6, observations.Length);
-        Assert.Equal([2L, 3L, 4L, 5L, 6L, 7L], observations.Select(x => x.Sequence.Value));
-        Assert.Equal(["Add", "Update", "Delete", "Aggregation", "Noop", "Add"], observations.Select(DiffType));
+        Assert.Equal(5, observations.Length);
+        Assert.Equal([2L, 3L, 4L, 5L, 6L], observations.Select(x => x.Sequence.Value));
+        Assert.Equal(["Add", "Update", "Delete", "Aggregation", "Noop"], observations.Select(DiffType));
 
         using var artifact = JsonDocument.Parse(observations[1].Content);
         Assert.Equal("native_query_diff", artifact.RootElement.GetProperty("type").GetString());

@@ -31,24 +31,24 @@ public sealed class SentinelManifest
         A2aAuthenticationManifest a2aAuthentication,
         SafeCatalog safeCatalog,
         ExecutableCatalog executableCatalog,
-        string databaseConnectionString,
         string directory,
         Uri? webhookUrl,
         bool queryAuthoringEnabled,
         IReadOnlyList<string> plugins,
-        SecretStoreManifest? secretStore)
+        SecretStoreManifest? secretStore,
+        string? dataDirectory = null)
     {
         Agent = agent;
         Profile = profile;
         A2aAuthentication = a2aAuthentication;
         SafeCatalog = safeCatalog;
         ExecutableCatalog = executableCatalog;
-        DatabaseConnectionString = databaseConnectionString;
         Directory = directory;
         WebhookUrl = webhookUrl;
         QueryAuthoringEnabled = queryAuthoringEnabled;
         Plugins = plugins;
         SecretStore = secretStore;
+        DataDirectory = dataDirectory;
     }
 
     public AgentManifest? Agent { get; }
@@ -60,8 +60,8 @@ public sealed class SentinelManifest
     public IReadOnlyList<string> Plugins { get; }
     internal SecretStoreManifest? SecretStore { get; }
     internal ExecutableCatalog ExecutableCatalog { get; }
-    internal string DatabaseConnectionString { get; }
     internal string Directory { get; }
+    internal string? DataDirectory { get; }
 }
 
 public sealed class ManifestLoadException(string message, Exception? innerException = null)
@@ -112,7 +112,7 @@ public static class SentinelManifestLoader
         var profile = ReadProfile(service);
         var webhookUrl = ReadWebhook(service);
         var queryAuthoringEnabled = ReadQueryAuthoring(service);
-        var databaseConnectionString = ReadDatabaseConnectionString(service, secretStore);
+        var dataDirectory = ReadDataDirectory(service, manifestPath);
         var a2aAuthentication = ReadA2aAuthentication(service, profile, secretStore);
         var sources = ReadEntries(root, "sources")
             .Select(entry => ReadSource(entry, manifestPath))
@@ -160,13 +160,13 @@ public static class SentinelManifestLoader
                 queries.ToDictionary(
                     query => query.Key,
                     query => new ExecutableQuery(query.Key, query.Value.Cypher, query.Value.SourceIds))),
-            databaseConnectionString,
             Path.GetDirectoryName(Path.GetFullPath(manifestPath))
                 ?? throw new ManifestLoadException("The manifest path has no parent directory."),
             webhookUrl,
             queryAuthoringEnabled,
             plugins,
-            secretStore?.Manifest);
+            secretStore?.Manifest,
+            dataDirectory);
     }
 
     private static IReadOnlyList<string> ReadPlugins(YamlMappingNode root)
@@ -410,7 +410,7 @@ public static class SentinelManifestLoader
 
     private static ServiceProfile ReadProfile(YamlMappingNode service)
     {
-        RequireOnlyKeys(service, "service", "profile", "database", "a2a", "webhook", "query_authoring");
+        RequireOnlyKeys(service, "service", "profile", "a2a", "webhook", "query_authoring", "data");
         return RequiredScalar(service, "profile", "service") switch
         {
             "demo" => ServiceProfile.Demo,
@@ -447,10 +447,13 @@ public static class SentinelManifestLoader
         };
     }
 
-    private static string ReadDatabaseConnectionString(YamlMappingNode service, LoadedSecretStore? secretStore)
+    private static string? ReadDataDirectory(YamlMappingNode service, string manifestPath)
     {
-        var database = RequireMapping(Required(service, "database", "service"), "service.database");
-        return ReadHostConfigValue(database, "service.database", secretStore);
+        if (!service.Children.TryGetValue(new YamlScalarNode("data"), out var node))
+            return null;
+        if (node is not YamlScalarNode { Value: { Length: > 0 } value })
+            throw new ManifestLoadException("service.data must be a non-empty path.");
+        return ResolveManifestPath(value, manifestPath);
     }
 
     private static A2aAuthenticationManifest ReadA2aAuthentication(

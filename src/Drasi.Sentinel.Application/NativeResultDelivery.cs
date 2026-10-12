@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Channels;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -64,7 +66,7 @@ public sealed class NativeResultIngestion(
         string? queryDescription = null;
         if (catalog?.Queries.TryGetValue(subscription.Request.QueryId, out var query) == true)
             queryDescription = query.Description;
-        var persisted = await repository.AppendEventAsync(
+        var persisted = await repository.AppendDiffOnceAsync(
             subscription.Owner,
             new ConversationEvent(
                 subscription.TaskId,
@@ -79,6 +81,8 @@ public sealed class NativeResultIngestion(
                     queryDescription,
                     reactionId = subscription.Request.ReactionId.Value,
                     occurredAt,
+                    querySequence = diff.QuerySequence,
+                    diffOrdinal = diff.DiffOrdinal,
                     diffType = diff.Type,
                     data = diff.Data,
                     before = diff.Before,
@@ -87,7 +91,10 @@ public sealed class NativeResultIngestion(
                     metadata = diff.Metadata,
                 }, ArtifactJsonOptions),
                 occurredAt),
+            DiffReceipt(diff),
             cancellationToken);
+        if (persisted is null)
+            return;
         notifier.Notify(persisted.TaskId);
         if (webhook is null)
             return;
@@ -98,6 +105,19 @@ public sealed class NativeResultIngestion(
         catch (Exception)
         {
         }
+    }
+
+    private static string DiffReceipt(NativeQueryDiff diff)
+    {
+        var canonical = JsonSerializer.Serialize(new
+        {
+            diff.Type,
+            diff.Data,
+            diff.Before,
+            diff.After,
+            diff.GroupingKeys,
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
     private sealed record NativeDelivery(NativeSubscriptionId SubscriptionId, NativeQueryDiff Diff);

@@ -69,7 +69,9 @@ public sealed class NativeQueryDiff
         JsonObject? before,
         JsonObject? after,
         JsonArray? groupingKeys,
-        JsonObject? metadata)
+        JsonObject? metadata,
+        ulong? querySequence = null,
+        int diffOrdinal = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(type);
         Type = type;
@@ -78,6 +80,8 @@ public sealed class NativeQueryDiff
         After = Clone(after);
         GroupingKeys = Clone(groupingKeys);
         Metadata = Clone(metadata);
+        QuerySequence = querySequence;
+        DiffOrdinal = diffOrdinal;
     }
 
     public string Type { get; }
@@ -86,6 +90,8 @@ public sealed class NativeQueryDiff
     public JsonObject? After { get; }
     public JsonArray? GroupingKeys { get; }
     public JsonObject? Metadata { get; }
+    public ulong? QuerySequence { get; }
+    public int DiffOrdinal { get; }
 
     private static JsonObject? Clone(JsonObject? value) => value?.DeepClone().AsObject();
     private static JsonArray? Clone(JsonArray? value) => value?.DeepClone().AsArray();

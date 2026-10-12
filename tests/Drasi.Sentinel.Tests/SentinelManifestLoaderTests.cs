@@ -6,6 +6,53 @@ namespace Drasi.Sentinel.Tests;
 public sealed class SentinelManifestLoaderTests
 {
     [Fact]
+    public void Load_resolves_an_optional_data_directory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var manifest = Path.Combine(directory, "sentinel.yaml");
+        File.WriteAllText(manifest, """
+            service:
+              profile: demo
+              a2a:
+                authentication:
+                  mode: anonymous
+              data: stores
+            sources: []
+            queries: []
+            reactions:
+              - id: notify
+            """);
+
+        try
+        {
+            var loaded = SentinelManifestLoader.Load(manifest);
+            Assert.Equal(Path.Combine(directory, "stores"), loaded.DataDirectory);
+
+            File.WriteAllText(manifest, """
+                service:
+                  profile: demo
+                  a2a:
+                    authentication:
+                      mode: anonymous
+                  wal: redb
+                sources: []
+                queries: []
+                reactions:
+                  - id: notify
+                """);
+            var rejected = Assert.Throws<ManifestLoadException>(() => SentinelManifestLoader.Load(manifest));
+            Assert.Contains("service.wal", rejected.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Load_requires_one_reaction_when_query_authoring_is_enabled()
     {
         if (OperatingSystem.IsWindows())
@@ -13,16 +60,9 @@ public sealed class SentinelManifestLoaderTests
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         var manifest = Path.Combine(directory, "sentinel.yaml");
-        var previous = Environment.GetEnvironmentVariable("SENTINEL_TEST_DATABASE");
-        Environment.SetEnvironmentVariable(
-            "SENTINEL_TEST_DATABASE",
-            "Host=127.0.0.1;Username=sentinel;Password=secret;Database=sentinel");
         File.WriteAllText(manifest, """
             service:
               profile: demo
-              database:
-                kind: EnvironmentVariable
-                name: SENTINEL_TEST_DATABASE
               a2a:
                 authentication:
                   mode: anonymous
@@ -52,7 +92,6 @@ public sealed class SentinelManifestLoaderTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("SENTINEL_TEST_DATABASE", previous);
             Directory.Delete(directory, recursive: true);
         }
     }
@@ -65,14 +104,9 @@ public sealed class SentinelManifestLoaderTests
         var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(directory, "secrets"));
         var manifest = Path.Combine(directory, "sentinel.yaml");
-        var previous = Environment.GetEnvironmentVariable("SENTINEL_TEST_DATABASE");
-        Environment.SetEnvironmentVariable("SENTINEL_TEST_DATABASE", "Host=127.0.0.1;Database=sentinel");
         File.WriteAllText(manifest, """
             service:
               profile: demo
-              database:
-                kind: EnvironmentVariable
-                name: SENTINEL_TEST_DATABASE
               a2a:
                 authentication:
                   mode: anonymous
@@ -94,7 +128,7 @@ public sealed class SentinelManifestLoaderTests
 
             var secrets = Path.Combine(directory, "secrets", "secrets.json");
             File.WriteAllText(secrets, """
-                {"sentinel-connection-string":"Host=127.0.0.1;Database=sentinel","postgres-password":"example-only"}
+                {"postgres-password":"example-only"}
                 """);
             File.SetUnixFileMode(secrets, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             File.WriteAllText(manifest, """
@@ -106,9 +140,6 @@ public sealed class SentinelManifestLoaderTests
                   path: secrets/secrets.json
                 service:
                   profile: demo
-                  database:
-                    kind: Secret
-                    name: sentinel-connection-string
                   a2a:
                     authentication:
                       mode: anonymous
@@ -129,11 +160,9 @@ public sealed class SentinelManifestLoaderTests
             Assert.Equal("Secret", password["kind"]!.GetValue<string>());
             Assert.Equal("postgres-password", password["name"]!.GetValue<string>());
             Assert.DoesNotContain("example-only", password.ToJsonString(), StringComparison.Ordinal);
-            Assert.Equal("Host=127.0.0.1;Database=sentinel", loaded.DatabaseConnectionString);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("SENTINEL_TEST_DATABASE", previous);
             Directory.Delete(directory, recursive: true);
         }
     }

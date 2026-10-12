@@ -19,7 +19,11 @@ provide query, source, Cypher, or filter identifiers.
   starts the PostgreSQL building, floor, and room source from the Drasi
   building comfort tutorial, and no queries. The agent builds the watches.
 
+Each running example writes its journal, Drasi index, and state files under
+`data/` next to that example's `sentinel.yaml`. Two examples do not
+share those files. Set `service.data` to move them.
+
 Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` before running a host.
 The local accounting and curbside demos write owner-only `secrets/secrets.json`
-during bootstrap. The invoice example uses the same file for its connection
-string and JWT public key.
+during bootstrap. The invoice example uses the same file for its CDC
+password, CDC port, and JWT public key.

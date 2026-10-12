@@ -176,6 +176,7 @@ public sealed class A2aProtocolInvariantTests
         public Task<ToolResult> InvokeAsync(Principal principal, TaskTurnId turn, GovernedToolCall call, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<ConversationEvent>> ReadEventsAsync(Principal principal, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken) =>
             Task.FromResult(read().Where(item => item.Sequence.Value > after.Value).Take(limit).ToArray() as IReadOnlyList<ConversationEvent>);
+        public Task RestoreWatchesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     private sealed class Reader(IConversationRepository repository) : IConversationSubscriptions
@@ -183,5 +184,6 @@ public sealed class A2aProtocolInvariantTests
         public Task<ToolResult> InvokeAsync(Principal principal, TaskTurnId turn, GovernedToolCall call, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<ConversationEvent>> ReadEventsAsync(Principal principal, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken) =>
             repository.ReadEventsAsync(principal.Owner, taskId, after, limit, cancellationToken);
+        public Task RestoreWatchesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

@@ -94,14 +94,12 @@ wait_for_postgres() {
 write_secret_files() {
 	(
 		umask 077
-		SENTINEL_CONNECTION_STRING="Host=127.0.0.1;Port=$POSTGRES_PORT;Database=sentinel;Username=sentinel;Password=$POSTGRES_PASSWORD;SSL Mode=Disable" \
 			SENTINEL_POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
 			SENTINEL_MYSQL_PASSWORD="$MYSQL_PASSWORD" \
 			python3 - "$SECRETS_JSON" <<'PY'
 import json, os, sys
 with open(sys.argv[1], "w", encoding="utf-8") as handle:
     json.dump({
-        "sentinel-connection-string": os.environ["SENTINEL_CONNECTION_STRING"],
         "postgres-password": os.environ["SENTINEL_POSTGRES_PASSWORD"],
         "mysql-password": os.environ["SENTINEL_MYSQL_PASSWORD"],
     }, handle)
@@ -348,7 +346,6 @@ Local curbside resources are ready.
 
 PostgreSQL listens only on 127.0.0.1:$POSTGRES_PORT. Database retail holds orders.
 MySQL listens only on 127.0.0.1:$MYSQL_PORT. Database physical holds vehicles.
-Database sentinel stores Sentinel task state.
 sentinel.yaml declares the PostgreSQL and MySQL source and bootstrap plugins.
 Sentinel downloads and installs those refs when the host starts.
 

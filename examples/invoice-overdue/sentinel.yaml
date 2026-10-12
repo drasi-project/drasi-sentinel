@@ -10,9 +10,6 @@ secretStore:
   path: secrets/secrets.json
 service:
   profile: production
-  database:
-    kind: Secret
-    name: sentinel-connection-string
   a2a:
     authentication:
       mode: jwt

@@ -40,6 +40,8 @@ public interface IConversationSubscriptions
         TaskEventSequence after,
         int limit,
         CancellationToken cancellationToken);
+
+    Task RestoreWatchesAsync(CancellationToken cancellationToken);
 }
 
 public interface INativeEngine : IAsyncDisposable
@@ -88,27 +90,48 @@ public sealed record DrasiTopology(
     IReadOnlyList<string> PluginReferences,
     DrasiSecretStore? SecretStore,
     IReadOnlyList<DrasiPluginSourceDefinition> Sources,
-    IReadOnlyList<DrasiQueryDefinition> Queries);
+    IReadOnlyList<DrasiQueryDefinition> Queries,
+    string? DataDirectory = null);
 
 public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeResultIngestion? resultIngestion = null) : INativeEngine
 {
+    private readonly List<string> _feedQueryIds = [];
     private Engine? _engine;
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         if (_engine is not null) return;
-        var engine = await Engine.CreateAsync(topology.EngineId, cancellationToken: cancellationToken);
+        _engine = await DrasiStores.OpenAsync(
+            topology.PluginDirectory,
+            topology.DataDirectory,
+            SecretFilePath(topology),
+            topology.EngineId,
+            BindTopologyAsync,
+            cancellationToken);
+    }
+
+    private async Task BindTopologyAsync(Engine engine, CancellationToken cancellationToken)
+    {
         await InstallPluginsAsync(engine, topology.PluginDirectory, topology.PluginReferences, cancellationToken);
         if (topology.SecretStore is { } secretStore)
             await engine.UseSecretStoreAsync(secretStore.Kind, secretStore.Configuration, cancellationToken);
         await engine.StartAsync(cancellationToken);
         foreach (var source in topology.Sources)
-            await engine.AddSourceAsync(source.Kind, source.Id, source.Configuration, bootstrap: source.Bootstrap, cancellationToken: cancellationToken);
+            await engine.AddSourceAsync(source.Kind, source.Id, source.Configuration, autoStart: false, bootstrap: source.Bootstrap, cancellationToken: cancellationToken);
         foreach (var query in topology.Queries)
         {
-            await engine.AddQueryAsync(NativeQueryId(query.Id), query.Cypher, query.SourceIds, new QueryOptions { EnableBootstrap = true }, cancellationToken);
-            await engine.WaitForQueryAsync(NativeQueryId(query.Id), null, cancellationToken);
+            var nativeId = NativeQueryId(query.Id);
+            await engine.AddQueryAsync(nativeId, query.Cypher, query.SourceIds, new QueryOptions { EnableBootstrap = true }, cancellationToken);
+            _feedQueryIds.Add(nativeId);
         }
-        _engine = engine;
+    }
+
+    public async Task StartFeedsAsync(CancellationToken cancellationToken)
+    {
+        var engine = RequireEngine();
+        foreach (var source in topology.Sources)
+            await engine.StartSourceAsync(source.Id, cancellationToken);
+        foreach (var queryId in _feedQueryIds)
+            await engine.WaitForQueryAsync(queryId, null, cancellationToken);
     }
 
     public Task AttachAsync(ConversationSubscription subscription, CancellationToken cancellationToken) =>
@@ -119,8 +142,19 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
             true,
             cancellationToken);
 
-    public Task DetachAsync(NativeSubscriptionId subscriptionId, CancellationToken cancellationToken) =>
-        RequireEngine().RemoveReactionAsync(subscriptionId.Value, true, cancellationToken);
+    public async Task DetachAsync(NativeSubscriptionId subscriptionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RequireEngine().RemoveReactionAsync(subscriptionId.Value, true, cancellationToken);
+        }
+        catch (DrasiException exception) when (IsAbsentReaction(exception))
+        {
+        }
+    }
+
+    internal static bool IsAbsentReaction(Exception exception) =>
+        exception.Message.Contains("reaction not found", StringComparison.OrdinalIgnoreCase);
 
     public async Task<IReadOnlyList<JsonNode>> GetQueryResultsAsync(QueryId queryId, CancellationToken cancellationToken)
     {
@@ -131,8 +165,18 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
 
     public async ValueTask DisposeAsync()
     {
-        if (_engine is not null) await _engine.DisposeAsync();
+        var engine = _engine;
+        if (engine is null) return;
         _engine = null;
+        await DrasiStores.ReleaseAsync(engine);
+    }
+
+    private static string? SecretFilePath(DrasiTopology topology)
+    {
+        if (topology.SecretStore?.Configuration["path"] is JsonValue value &&
+            value.GetValueKind() == JsonValueKind.String)
+            return value.GetValue<string>();
+        return null;
     }
 
     private static async Task InstallPluginsAsync(
@@ -151,7 +195,9 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
     private void IngestResult(NativeSubscriptionId id, QueryResultEvent result)
     {
         if (resultIngestion is null) return;
+        var ordinal = 0;
         foreach (var diff in result.Results)
+        {
             resultIngestion.Enqueue(
                 id,
                 new NativeQueryDiff(
@@ -162,7 +208,11 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
                     diff.GroupingKeys is null
                         ? null
                         : new JsonArray(diff.GroupingKeys.Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
-                    result.Metadata));
+                    result.Metadata,
+                    result.Sequence,
+                    ordinal));
+            ordinal++;
+        }
     }
 }
 
@@ -257,7 +307,13 @@ public sealed class ConversationSubscriptions(
             ?? throw new SentinelException("subscription_not_found", "The subscription does not exist.");
         if (subscription.State is not (SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired))
         {
-            await engine.DetachAsync(subscription.NativeSubscriptionId, cancellationToken);
+            try
+            {
+                await engine.DetachAsync(subscription.NativeSubscriptionId, cancellationToken);
+            }
+            catch (Exception exception) when (DrasiNativeEngine.IsAbsentReaction(exception))
+            {
+            }
             subscription = subscription with { State = SubscriptionState.Cancelled };
             await repository.SaveSubscriptionAsync(subscription, cancellationToken);
             await AppendAsync(principal.Owner, taskId, ConversationEventKind.SubscriptionChanged, subscription.Id,
@@ -266,6 +322,30 @@ public sealed class ConversationSubscriptions(
                 "The task subscription was cancelled.", cancellationToken);
         }
         return new("subscription_cancelled", subscription);
+    }
+
+    public async Task RestoreWatchesAsync(CancellationToken cancellationToken)
+    {
+        foreach (var subscription in await repository.ListRestorableSubscriptionsAsync(cancellationToken))
+        {
+            // drasi-lib 0.8.9 stores a reaction checkpoint and then refuses to start
+            // that same id, because the query outbox does not survive the process.
+            // A new id is a fresh subscription. The watch row stays the same.
+            var renewed = subscription with
+            {
+                State = SubscriptionState.Active,
+                NativeSubscriptionId = new($"reaction-{subscription.Id.Value:N}-{Guid.NewGuid():N}"),
+            };
+            await repository.SaveSubscriptionAsync(renewed, cancellationToken);
+            try
+            {
+                await engine.AttachAsync(renewed, cancellationToken);
+            }
+            catch (Exception)
+            {
+                await repository.SaveSubscriptionAsync(renewed with { State = SubscriptionState.Degraded }, CancellationToken.None);
+            }
+        }
     }
 
     private async Task<ToolResult> GetCurrentResultsAsync(Principal principal, TaskTurnId turn, CancellationToken cancellationToken)

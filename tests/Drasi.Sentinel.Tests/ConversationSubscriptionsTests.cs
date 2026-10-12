@@ -30,7 +30,7 @@ public sealed class ConversationSubscriptionsTests
 
         var ingestion = new NativeResultIngestion(repository, notifier, TimeProvider.System);
         await ingestion.IngestAsync(first.Subscription.NativeSubscriptionId, Diff("order-1"), CancellationToken.None);
-        await ingestion.IngestAsync(first.Subscription.NativeSubscriptionId, Diff("order-1"), CancellationToken.None);
+        await ingestion.IngestAsync(first.Subscription.NativeSubscriptionId, Diff("order-2"), CancellationToken.None);
 
         var events = await service.ReadEventsAsync(principal, new("task-1"), new(0), 100, CancellationToken.None);
         Assert.Equal(3, events.Count);

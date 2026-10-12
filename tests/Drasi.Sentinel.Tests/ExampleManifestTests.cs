@@ -58,7 +58,6 @@ public sealed class ExampleManifestTests
             }
             Assert.Equal("file", manifest.SecretStore?.Kind);
             Assert.True(Path.IsPathRooted(manifest.SecretStore!.Configuration["path"]!.GetValue<string>()));
-            Assert.Contains("Host=127.0.0.1", manifest.DatabaseConnectionString, StringComparison.Ordinal);
             Assert.All(
                 manifest.ExecutableCatalog.Sources.Values,
                 source => Assert.Equal(
