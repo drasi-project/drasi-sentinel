@@ -135,11 +135,11 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
     }
 
     public Task AttachAsync(ConversationSubscription subscription, CancellationToken cancellationToken) =>
-        RequireEngine().AddReactionAsync(
+        RequireEngine().AddDurableReactionAsync(
             subscription.NativeSubscriptionId.Value,
             [NativeQueryId(subscription.Request.QueryId)],
-            result => IngestResult(subscription.NativeSubscriptionId, result),
-            true,
+            result => IngestDurableAsync(subscription.NativeSubscriptionId, result),
+            RecoveryPolicy.Strict,
             cancellationToken);
 
     public async Task DetachAsync(NativeSubscriptionId subscriptionId, CancellationToken cancellationToken)
@@ -192,27 +192,12 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
     }
 
     private Engine RequireEngine() => _engine ?? throw new SentinelException("engine_unavailable", "The Drasi engine is not started.");
-    private void IngestResult(NativeSubscriptionId id, QueryResultEvent result)
+
+    private Task IngestDurableAsync(NativeSubscriptionId id, QueryResultEvent result)
     {
-        if (resultIngestion is null) return;
-        var ordinal = 0;
-        foreach (var diff in result.Results)
-        {
-            resultIngestion.Enqueue(
-                id,
-                new NativeQueryDiff(
-                    diff.Type.ToString(),
-                    diff.Data,
-                    diff.Before,
-                    diff.After,
-                    diff.GroupingKeys is null
-                        ? null
-                        : new JsonArray(diff.GroupingKeys.Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
-                    result.Metadata,
-                    result.Sequence,
-                    ordinal));
-            ordinal++;
-        }
+        if (resultIngestion is null)
+            throw new InvalidOperationException("A durable reaction requires result ingestion.");
+        return resultIngestion.IngestResultAsync(id, result, CancellationToken.None);
     }
 }
 
@@ -283,13 +268,24 @@ public sealed class ConversationSubscriptions(
                     "An A2A task can own only one active change subscription.");
             return new("subscription_created", subscription);
         }
+        var retrying = subscription.State == SubscriptionState.Degraded;
         try
         {
+            if (subscription.State != SubscriptionState.Active)
+            {
+                subscription = subscription with { State = SubscriptionState.Active };
+                await repository.SaveSubscriptionAsync(subscription, cancellationToken);
+            }
             await engine.AttachAsync(subscription, cancellationToken);
-            subscription = subscription with { State = SubscriptionState.Active };
-            await repository.SaveSubscriptionAsync(subscription, cancellationToken);
-            await AppendAsync(principal.Owner, taskId, ConversationEventKind.SubscriptionCreated, subscription.Id,
-                $"Subscription {subscription.Id.Value} is active.", cancellationToken);
+            await AppendAsync(
+                principal.Owner,
+                taskId,
+                retrying ? ConversationEventKind.SubscriptionChanged : ConversationEventKind.SubscriptionCreated,
+                subscription.Id,
+                retrying
+                    ? $"Subscription {subscription.Id.Value} is active again."
+                    : $"Subscription {subscription.Id.Value} is active.",
+                cancellationToken);
         }
         catch
         {
@@ -328,22 +324,32 @@ public sealed class ConversationSubscriptions(
     {
         foreach (var subscription in await repository.ListRestorableSubscriptionsAsync(cancellationToken))
         {
-            // drasi-lib 0.8.9 stores a reaction checkpoint and then refuses to start
-            // that same id, because the query outbox does not survive the process.
-            // A new id is a fresh subscription. The watch row stays the same.
-            var renewed = subscription with
-            {
-                State = SubscriptionState.Active,
-                NativeSubscriptionId = new($"reaction-{subscription.Id.Value:N}-{Guid.NewGuid():N}"),
-            };
-            await repository.SaveSubscriptionAsync(renewed, cancellationToken);
+            var ready = subscription.State == SubscriptionState.Active
+                ? subscription
+                : subscription with { State = SubscriptionState.Active };
+            if (ready != subscription)
+                await repository.SaveSubscriptionAsync(ready, cancellationToken);
             try
             {
-                await engine.AttachAsync(renewed, cancellationToken);
+                await engine.AttachAsync(ready, cancellationToken);
             }
-            catch (Exception)
+            catch (Exception exception)
             {
-                await repository.SaveSubscriptionAsync(renewed with { State = SubscriptionState.Degraded }, CancellationToken.None);
+                var failed = ready with { State = SubscriptionState.Degraded };
+                await repository.SaveSubscriptionAsync(failed, CancellationToken.None);
+                try
+                {
+                    await AppendAsync(
+                        failed.Owner,
+                        failed.TaskId,
+                        ConversationEventKind.SubscriptionChanged,
+                        failed.Id,
+                        $"Subscription {failed.Id.Value} could not be reattached: {exception.Message}",
+                        CancellationToken.None);
+                }
+                catch (Exception)
+                {
+                }
             }
         }
     }

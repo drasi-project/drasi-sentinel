@@ -33,14 +33,15 @@ messages and protobuf-style text parts remain supported.
 The host stores conversation tasks, subscriptions, authored queries, and
 append-only task events in `data/journal.sqlite`. The Drasi engine stores query
 indexes in RocksDB and plugin state in a redb file under the same `data/`
-directory, next to the manifest. Set `service.data` to another directory, relative to the
-manifest or absolute, when those files should live elsewhere. The .NET package
-cannot set a Drasi WAL provider. A Postgres source keeps its read position in
-the replication slot named by that source. Exit the process before starting
-another against the same data directory. The state file stays locked until the
-process exits. A new process reopens the indexes, reattaches each watch that
-has not ended, and then starts sources. A change the source still holds is
-written to that watch's journal.
+directory, next to the manifest. The source write-ahead log is `data/wal`.
+It does not resume a Postgres or MySQL source. Set `service.data` to another
+directory, relative to the manifest or absolute, when those files should live
+elsewhere. A Postgres source keeps its read position in the replication slot
+named by that source. The state file stays locked until the process exits.
+Exit the process before starting another against the same data directory. A new
+process reopens the indexes, reattaches each watch that has not ended on its
+stored reaction id, and then starts sources. A change the source or the query
+outbox still holds is written to that watch's journal.
 
 Every native query diff appends an A2A JSON data artifact to that journal. If `service.webhook.url` is set, the same JSON is
 also posted to that URL after the journal write. Each artifact retains the native diff type, raw JSON

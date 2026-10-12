@@ -28,7 +28,9 @@ internal static class DrasiStores
         var dataRoot = ResolveRoot(pluginRoot, configuredDataDirectory);
         ValidatePlacement(pluginRoot, dataRoot, secretFilePath);
         var indexDirectory = Path.Combine(dataRoot, "indexes");
+        var walDirectory = Path.Combine(dataRoot, "wal");
         Directory.CreateDirectory(indexDirectory);
+        Directory.CreateDirectory(walDirectory);
 
         var engine = await Engine.CreateAsync(
             engineId,
@@ -43,6 +45,11 @@ internal static class DrasiStores
                 {
                     Kind = "redb",
                     Path = Path.Combine(dataRoot, "state.redb"),
+                },
+                WalProvider = new WalProviderOptions
+                {
+                    Kind = "redb",
+                    Path = walDirectory,
                 },
             },
             cancellationToken);
@@ -68,8 +75,8 @@ internal static class DrasiStores
     }
 
     /// <summary>
-    /// Releases the RocksDB lock. The redb file stays locked until this process exits;
-    /// package 0.1.0 does not reopen that file in the same process after shutdown.
+    /// Releases the RocksDB lock and asks the engine to shut down. Package 0.2.0
+    /// still holds the redb file lock until the process exits.
     /// </summary>
     public static async ValueTask ReleaseAsync(Engine? engine)
     {

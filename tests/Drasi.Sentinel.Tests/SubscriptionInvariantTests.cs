@@ -209,7 +209,7 @@ public sealed class SubscriptionInvariantTests
     }
 
     [Fact]
-    public async Task Native_diffs_append_complete_structured_data_and_drop_an_identical_replay()
+    public async Task Native_diffs_append_complete_structured_data()
     {
         var (service, repository, principal) = await CreateAsync();
         var subscription = await Subscribe(service, principal, "task", "message", "request");
@@ -227,9 +227,9 @@ public sealed class SubscriptionInvariantTests
 
         var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 100, CancellationToken.None);
         var observations = events.Where(x => x.Kind == ConversationEventKind.Observation).ToArray();
-        Assert.Equal(5, observations.Length);
-        Assert.Equal([2L, 3L, 4L, 5L, 6L], observations.Select(x => x.Sequence.Value));
-        Assert.Equal(["Add", "Update", "Delete", "Aggregation", "Noop"], observations.Select(DiffType));
+        Assert.Equal(6, observations.Length);
+        Assert.Equal([2L, 3L, 4L, 5L, 6L, 7L], observations.Select(x => x.Sequence.Value));
+        Assert.Equal(["Add", "Update", "Delete", "Aggregation", "Noop", "Add"], observations.Select(DiffType));
 
         using var artifact = JsonDocument.Parse(observations[1].Content);
         Assert.Equal("native_query_diff", artifact.RootElement.GetProperty("type").GetString());
@@ -270,12 +270,14 @@ public sealed class SubscriptionInvariantTests
     }
 
     [Fact]
-    public async Task Unknown_native_subscription_has_no_task_effect()
+    public async Task Unknown_native_subscription_is_not_acknowledged()
     {
         var (service, repository, principal) = await CreateAsync();
         await Subscribe(service, principal, "task", "message", "request");
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
-        await ingestion.IngestAsync(new("unknown"), Diff("Add", "entity-200", "event"), CancellationToken.None);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ingestion.IngestAsync(new("unknown"), Diff("Add", "entity-200", "event"), CancellationToken.None));
+        Assert.Contains("unknown", error.Message, StringComparison.Ordinal);
         var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 100, CancellationToken.None);
         Assert.DoesNotContain(events, x => x.Kind == ConversationEventKind.Observation);
     }

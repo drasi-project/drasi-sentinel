@@ -10,7 +10,7 @@ public interface IConversationRepository
     Task<ConversationSubscription?> GetSubscriptionAsync(OwnerId owner, ConversationTaskId taskId, SubscriptionId subscriptionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<ConversationSubscription>> ListSubscriptionsAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
     Task<IReadOnlyList<ConversationSubscription>> ListRestorableSubscriptionsAsync(CancellationToken cancellationToken);
-    Task<ConversationEvent?> AppendDiffOnceAsync(OwnerId owner, ConversationEvent input, string receipt, CancellationToken cancellationToken);
+    Task<ConversationEvent?> AppendDiffOnceAsync(OwnerId owner, ConversationEvent input, string? receipt, CancellationToken cancellationToken);
     Task<ConversationSubscription?> GetSubscriptionByNativeIdAsync(NativeSubscriptionId nativeId, CancellationToken cancellationToken);
     Task SaveSubscriptionAsync(ConversationSubscription subscription, CancellationToken cancellationToken);
     Task<ConversationEvent> AppendEventAsync(OwnerId owner, ConversationEvent eventToAppend, CancellationToken cancellationToken);
@@ -130,14 +130,14 @@ public sealed class InMemorySentinelRepository : IConversationRepository
     public Task<IReadOnlyList<ConversationSubscription>> ListRestorableSubscriptionsAsync(CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<ConversationSubscription>>(_subscriptions.Values.Where(IsRestorable).OrderBy(x => x.CreatedAt).ToArray());
 
-    public async Task<ConversationEvent?> AppendDiffOnceAsync(OwnerId owner, ConversationEvent input, string receipt, CancellationToken cancellationToken)
+    public async Task<ConversationEvent?> AppendDiffOnceAsync(OwnerId owner, ConversationEvent input, string? receipt, CancellationToken cancellationToken)
     {
         if (input.SubscriptionId is not { } subscriptionId)
             throw new InvalidOperationException("A query diff requires a subscription.");
         await Gate(input.TaskId).WaitAsync(cancellationToken);
         try
         {
-            if (!_diffReceipts.Add((subscriptionId, receipt)))
+            if (receipt is not null && !_diffReceipts.Add((subscriptionId, receipt)))
                 return null;
             var events = _events.GetOrAdd((owner, input.TaskId), static _ => []);
             lock (events)

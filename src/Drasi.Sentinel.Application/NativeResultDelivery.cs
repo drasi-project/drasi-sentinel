@@ -1,8 +1,8 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.Channels;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using Drasi;
 using Drasi.Sentinel.Domain;
 
 namespace Drasi.Sentinel.Application;
@@ -16,6 +16,7 @@ public interface INativeResultIngestion
 {
     void Enqueue(NativeSubscriptionId subscriptionId, NativeQueryDiff diff);
     Task IngestAsync(NativeSubscriptionId subscriptionId, NativeQueryDiff diff, CancellationToken cancellationToken);
+    Task IngestResultAsync(NativeSubscriptionId subscriptionId, QueryResultEvent result, CancellationToken cancellationToken);
     Task RunAsync(CancellationToken cancellationToken);
 }
 
@@ -56,11 +57,25 @@ public sealed class NativeResultIngestion(
         }
     }
 
+    public async Task IngestResultAsync(NativeSubscriptionId subscriptionId, QueryResultEvent result, CancellationToken cancellationToken)
+    {
+        var ordinal = 0;
+        foreach (var diff in result.Results)
+        {
+            await IngestAsync(subscriptionId, ToDiff(diff, result, ordinal), cancellationToken);
+            ordinal++;
+        }
+    }
+
     public async Task IngestAsync(NativeSubscriptionId subscriptionId, NativeQueryDiff diff, CancellationToken cancellationToken)
     {
         var subscription = await repository.GetSubscriptionByNativeIdAsync(subscriptionId, cancellationToken);
-        if (subscription is null || subscription.State is not (SubscriptionState.Arming or SubscriptionState.Active))
+        if (subscription is null)
+            throw new InvalidOperationException($"No watch is registered for reaction {subscriptionId.Value}.");
+        if (subscription.State is SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired)
             return;
+        if (subscription.State is not (SubscriptionState.Arming or SubscriptionState.Active or SubscriptionState.Degraded))
+            throw new InvalidOperationException($"Watch {subscription.Id.Value} cannot accept a diff while {subscription.State}.");
 
         var occurredAt = timeProvider.GetUtcNow();
         string? queryDescription = null;
@@ -91,7 +106,7 @@ public sealed class NativeResultIngestion(
                     metadata = diff.Metadata,
                 }, ArtifactJsonOptions),
                 occurredAt),
-            DiffReceipt(diff),
+            SequenceReceipt(diff),
             cancellationToken);
         if (persisted is null)
             return;
@@ -107,18 +122,20 @@ public sealed class NativeResultIngestion(
         }
     }
 
-    private static string DiffReceipt(NativeQueryDiff diff)
-    {
-        var canonical = JsonSerializer.Serialize(new
-        {
-            diff.Type,
-            diff.Data,
-            diff.Before,
-            diff.After,
-            diff.GroupingKeys,
-        });
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
-    }
+    private static string? SequenceReceipt(NativeQueryDiff diff) =>
+        diff.QuerySequence is { } sequence ? $"{sequence}:{diff.DiffOrdinal}" : null;
+
+    private static NativeQueryDiff ToDiff(QueryDiff diff, QueryResultEvent result, int ordinal) => new(
+        diff.Type.ToString(),
+        diff.Data,
+        diff.Before,
+        diff.After,
+        diff.GroupingKeys is null
+            ? null
+            : new JsonArray(diff.GroupingKeys.Select(key => (JsonNode?)JsonValue.Create(key)).ToArray()),
+        result.Metadata,
+        result.Sequence,
+        ordinal);
 
     private sealed record NativeDelivery(NativeSubscriptionId SubscriptionId, NativeQueryDiff Diff);
 }

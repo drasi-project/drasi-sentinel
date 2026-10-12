@@ -26,8 +26,7 @@ public sealed class WatchRestoreTests
         Assert.Contains(engine.Attached, item => item.TaskId.Value == "stuck" && item.State == SubscriptionState.Active);
         Assert.DoesNotContain(engine.Attached, item => item.TaskId.Value == "done");
         var restored = engine.Attached.Single(item => item.TaskId.Value == "live");
-        Assert.NotEqual(active.Subscription!.NativeSubscriptionId, restored.NativeSubscriptionId);
-        Assert.StartsWith($"reaction-{active.Subscription.Id.Value:N}-", restored.NativeSubscriptionId.Value, StringComparison.Ordinal);
+        Assert.Equal(active.Subscription!.NativeSubscriptionId, restored.NativeSubscriptionId);
         var events = await repository.ReadEventsAsync(principal.Owner, new("live"), new(0), 20, CancellationToken.None);
         Assert.DoesNotContain(events, item => item.Kind == ConversationEventKind.SubscriptionCreated && item.Sequence.Value > 1);
         Assert.Equal(SubscriptionState.Active, (await repository.GetSubscriptionAsync(principal.Owner, degraded.TaskId, degraded.Id, CancellationToken.None))!.State);
@@ -51,6 +50,43 @@ public sealed class WatchRestoreTests
         Assert.Equal(SubscriptionState.Active, good.State);
         Assert.Equal(SubscriptionState.Degraded, bad.State);
         Assert.Contains(engine.Attached, item => item.TaskId.Value == "good");
+        var failure = (await repository.ReadEventsAsync(principal.Owner, new("bad"), new(0), 20, CancellationToken.None))
+            .Single(item => item.Kind == ConversationEventKind.SubscriptionChanged);
+        Assert.Contains("could not be reattached", failure.Content, StringComparison.Ordinal);
+        Assert.Contains("native unavailable", failure.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Retry_of_a_degraded_watch_is_active_before_attach()
+    {
+        var repository = new InMemorySentinelRepository();
+        var engine = new RecordingEngine();
+        var service = Service(repository, engine);
+        var principal = new Principal(new("tenant"), new("owner"));
+        var degraded = await Arm(repository, principal, "stuck", SubscriptionState.Degraded);
+
+        var retried = await service.InvokeAsync(principal, new("stuck", "m2"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+
+        var attached = Assert.Single(engine.Attached);
+        Assert.Equal(degraded.NativeSubscriptionId, attached.NativeSubscriptionId);
+        Assert.Equal(SubscriptionState.Active, attached.State);
+        Assert.Equal(SubscriptionState.Active, retried.Subscription!.State);
+        var events = await repository.ReadEventsAsync(principal.Owner, new("stuck"), new(0), 20, CancellationToken.None);
+        Assert.Contains(events, item => item.Kind == ConversationEventKind.SubscriptionChanged && item.Content.Contains("active again", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Degraded_watch_keeps_a_diff_instead_of_dropping_it()
+    {
+        var repository = new InMemorySentinelRepository();
+        var principal = new Principal(new("tenant"), new("owner"));
+        var subscription = await Arm(repository, principal, "task", SubscriptionState.Degraded);
+        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
+
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-1", 4), CancellationToken.None);
+
+        var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None);
+        Assert.Contains(events, item => item.Kind == ConversationEventKind.Observation && item.Content.Contains("item-1", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -88,9 +124,9 @@ public sealed class WatchRestoreTests
         await repository.GetOrCreateSubscriptionAsync(subscription, CancellationToken.None);
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
 
-        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-1"), CancellationToken.None);
-        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-1"), CancellationToken.None);
-        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-2"), CancellationToken.None);
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-1", 7), CancellationToken.None);
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-1", 7), CancellationToken.None);
+        await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("item-2", 8), CancellationToken.None);
 
         var events = await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None);
         Assert.Equal(2, events.Count);
@@ -118,14 +154,14 @@ public sealed class WatchRestoreTests
         return await repository.GetOrCreateSubscriptionAsync(subscription, CancellationToken.None);
     }
 
-    private static NativeQueryDiff Diff(string id) => new(
+    private static NativeQueryDiff Diff(string id, ulong sequence) => new(
         "Insert",
         new JsonObject { ["id"] = id },
         null,
         null,
         null,
         null,
-        7,
+        sequence,
         0);
 
     private static SafeCatalog Catalog() => new(

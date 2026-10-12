@@ -19,7 +19,7 @@ provide query, source, Cypher, or filter identifiers.
   starts the PostgreSQL building, floor, and room source from the Drasi
   building comfort tutorial, and no queries. The agent builds the watches.
 
-Each running example writes its journal, Drasi index, and state files under
+Each running example writes its journal, Drasi index, state, and WAL files under
 `data/` next to that example's `sentinel.yaml`. Two examples do not
 share those files. Set `service.data` to move them.
 

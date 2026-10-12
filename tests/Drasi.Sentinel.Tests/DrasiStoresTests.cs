@@ -22,6 +22,7 @@ public sealed class DrasiStoresTests
             left = await DrasiStores.OpenAsync(first, null, null, "left", StartOnly, CancellationToken.None);
             right = await DrasiStores.OpenAsync(second, null, null, "right", StartOnly, CancellationToken.None);
             Assert.True(Directory.Exists(Path.Combine(first, DrasiStores.DirectoryName, "indexes")));
+            Assert.True(Directory.Exists(Path.Combine(first, DrasiStores.DirectoryName, "wal")));
             Assert.True(File.Exists(Path.Combine(first, DrasiStores.DirectoryName, "state.redb")));
             Assert.True(Directory.Exists(Path.Combine(second, DrasiStores.DirectoryName, "indexes")));
 
@@ -36,6 +37,29 @@ public sealed class DrasiStoresTests
             if (right is not null)
                 await DrasiStores.ReleaseAsync(right);
             TryDelete(root);
+        }
+    }
+
+    [Fact]
+    public async Task Shutdown_still_holds_the_redb_lock_in_the_same_process()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var first = await DrasiStores.OpenAsync(directory, null, null, "reopen", StartOnly, CancellationToken.None);
+            await DrasiStores.ReleaseAsync(first);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var blocked = await Assert.ThrowsAnyAsync<Exception>(() =>
+                DrasiStores.OpenAsync(directory, null, null, "reopen", StartOnly, CancellationToken.None));
+            Assert.Contains("already open", blocked.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            TryDelete(directory);
         }
     }
 

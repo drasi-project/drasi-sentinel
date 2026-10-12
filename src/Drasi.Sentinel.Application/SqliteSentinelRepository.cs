@@ -167,7 +167,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         return result;
     }
 
-    public async Task<ConversationEvent?> AppendDiffOnceAsync(OwnerId owner, ConversationEvent input, string receipt, CancellationToken cancellationToken)
+    public async Task<ConversationEvent?> AppendDiffOnceAsync(OwnerId owner, ConversationEvent input, string? receipt, CancellationToken cancellationToken)
     {
         if (input.SubscriptionId is not { } subscriptionId)
             throw new InvalidOperationException("A query diff requires a subscription.");
@@ -175,17 +175,20 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         await ExecuteAsync(connection, "BEGIN IMMEDIATE;", cancellationToken);
         try
         {
-            await using var claim = connection.CreateCommand();
-            claim.CommandText = """
-                INSERT INTO sentinel_diff_receipts (subscription_id, receipt) VALUES (@id, @receipt)
-                ON CONFLICT DO NOTHING;
-                """;
-            Add(claim, "@id", subscriptionId.Value.ToString("D"));
-            Add(claim, "@receipt", receipt);
-            if (await claim.ExecuteNonQueryAsync(cancellationToken) != 1)
+            if (receipt is not null)
             {
-                await ExecuteAsync(connection, "COMMIT;", cancellationToken);
-                return null;
+                await using var claim = connection.CreateCommand();
+                claim.CommandText = """
+                    INSERT INTO sentinel_diff_receipts (subscription_id, receipt) VALUES (@id, @receipt)
+                    ON CONFLICT DO NOTHING;
+                    """;
+                Add(claim, "@id", subscriptionId.Value.ToString("D"));
+                Add(claim, "@receipt", receipt);
+                if (await claim.ExecuteNonQueryAsync(cancellationToken) != 1)
+                {
+                    await ExecuteAsync(connection, "COMMIT;", cancellationToken);
+                    return null;
+                }
             }
 
             var stored = await InsertEventAsync(connection, owner, input, cancellationToken);
