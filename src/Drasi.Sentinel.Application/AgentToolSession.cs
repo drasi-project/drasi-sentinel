@@ -134,7 +134,7 @@ public sealed class AgentToolSession : IAgentTools
             return Rejected("committed_id", $"Subscribe to '{_committedQueryId}'. Do not subscribe to '{query}'.");
         if (_workbench is not null && !string.IsNullOrWhiteSpace(_callerText) &&
             await _workbench.CoverageGapAsync(query, _callerText, _cancellationToken) is { } gap)
-            return Rejected("query_rejected", gap);
+            return Rejected(gap.Contains("uncovered words", StringComparison.Ordinal) ? "mapping_required" : "query_rejected", gap);
         return await InvokeAsync(new SubscribeToQuery(
             new QueryId(query),
             new SubscriptionRequestKey($"a2a:{_turn.TaskId}:{_turn.MessageId}:request"),
@@ -223,6 +223,7 @@ public sealed class AgentToolSession : IAgentTools
             or "watch_ended"
             or "invalid_tool_arguments"
             or "query_rejected"
+            or "mapping_required"
             or "source_unknown"
             or "query_exists"
             or "ttl_required"

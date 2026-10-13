@@ -40,13 +40,15 @@ stop_process() {
 	return 0
 }
 
+journal_sql() {
+	sqlite3 -batch "$EXAMPLE_DIR/data/journal.sqlite" "$1"
+}
+
 dump_failure() {
 	printf '\n--- authored queries ---\n' >&2
-	docker exec "$CONTAINER_NAME" psql -U sentinel -d sentinel -c \
-		"SELECT query_id, cypher, source_ids, joins FROM sentinel_authored_queries ORDER BY query_id" >&2 || true
+	journal_sql "SELECT query_id, cypher, source_ids, joins FROM sentinel_authored_queries ORDER BY query_id;" >&2 || true
 	printf '\n--- subscriptions ---\n' >&2
-	docker exec "$CONTAINER_NAME" psql -U sentinel -d sentinel -c \
-		"SELECT task_id, query_id, state FROM sentinel_subscriptions ORDER BY created_at" >&2 || true
+	journal_sql "SELECT task_id, query_id, state FROM sentinel_subscriptions ORDER BY created_at;" >&2 || true
 	printf '\n--- mysql processlist ---\n' >&2
 	docker exec -e MYSQL_PWD=sentinel-demo "$MYSQL_CONTAINER" mysql -uroot -e 'SHOW PROCESSLIST' >&2 || true
 	if [[ -f "$SECRETS/host.log" ]]; then
@@ -128,7 +130,7 @@ wait_for_active() {
 	local task_id="$1"
 	local attempt state
 	for attempt in {1..120}; do
-		state="$(psql_at sentinel "SELECT state FROM sentinel_subscriptions WHERE task_id = '$task_id'" | tr -d '[:space:]' || true)"
+		state="$(journal_sql "SELECT state FROM sentinel_subscriptions WHERE task_id = '$task_id';" | tr -d '[:space:]' || true)"
 		[[ "$state" == "Active" ]] && return 0
 		if ! kill -0 "$stream_pid" >/dev/null 2>&1 && [[ "$attempt" -gt 5 ]]; then
 			return 1
@@ -149,13 +151,13 @@ wait_for_slots() {
 }
 
 query_for_task() {
-	psql_at sentinel "SELECT query_id FROM sentinel_subscriptions WHERE task_id = '$1' AND state = 'Active'" | tr -d '[:space:]'
+	journal_sql "SELECT query_id FROM sentinel_subscriptions WHERE task_id = '$1' AND state = 'Active';" | tr -d '[:space:]'
 }
 
 authored_field() {
 	local query_id="$1"
 	local column="$2"
-	psql_at sentinel "SELECT $column FROM sentinel_authored_queries WHERE query_id = '$query_id'"
+	journal_sql "SELECT $column FROM sentinel_authored_queries WHERE query_id = '$query_id';"
 }
 
 request_current_results() {
@@ -214,7 +216,7 @@ wait_for_diff() {
 	local needle="$3"
 	local attempt journal
 	for attempt in {1..25}; do
-		journal="$(psql_at sentinel "SELECT content FROM sentinel_task_events WHERE task_id = '$task_id' AND content LIKE '%native_query_diff%' AND content LIKE '%$needle%'" || true)"
+		journal="$(journal_sql "SELECT content FROM sentinel_task_events WHERE task_id = '$task_id' AND content LIKE '%native_query_diff%' AND content LIKE '%$needle%';" || true)"
 		if grep -F "$needle" <<<"$journal" >/dev/null 2>&1; then
 			printf '%s\n' "$journal" >"$output"
 			return 0
@@ -236,6 +238,27 @@ assert_contains() {
 	grep -F "$needle" <<<"$haystack" >/dev/null || fail "$label does not contain $needle: $haystack"
 }
 
+wait_for_pushback() {
+	local task_id="$1"
+	local output="$2"
+	local attempt count
+	for attempt in {1..90}; do
+		count="$(journal_sql "SELECT count(*) FROM sentinel_subscriptions WHERE task_id = '$task_id';" | tr -d '[:space:]' || true)"
+		if [[ -n "$count" && "$count" != "0" ]]; then
+			return 2
+		fi
+		if grep -E -i 'which|correspond|\?' "$output" >/dev/null 2>&1 &&
+			grep -E -i 'orders|vehicles|status|location|plate|customer_name' "$output" >/dev/null 2>&1; then
+			return 0
+		fi
+		if ! kill -0 "$stream_pid" >/dev/null 2>&1 && [[ "$attempt" -gt 8 ]]; then
+			return 1
+		fi
+		sleep 2
+	done
+	return 1
+}
+
 if [[ -f "$ACCOUNTING_ENV" ]]; then
 	set -a
 	# shellcheck source=/dev/null
@@ -246,7 +269,13 @@ fi
 	fail "Set AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_MODEL. The accounting demo .env is the expected source."
 
 trap cleanup EXIT INT TERM
-rm -f "$CONNECTION" "$DEMO_LOG"
+rm -f "$CONNECTION" "$DEMO_LOG" \
+	"$EXAMPLE_DIR/data/journal.sqlite" \
+	"$EXAMPLE_DIR/data/journal.sqlite-wal" \
+	"$EXAMPLE_DIR/data/journal.sqlite-shm" \
+	"$EXAMPLE_DIR/data/authored-queries.json" \
+	"$EXAMPLE_DIR/data/state.redb"
+rm -rf "$EXAMPLE_DIR/data/indexes"
 "$EXAMPLE_DIR/demo.sh" >"$DEMO_LOG" 2>&1 &
 demo_pid=$!
 wait_for_host || { cat "$DEMO_LOG" >&2; fail "Sentinel did not become ready."; }
@@ -282,18 +311,46 @@ assert_contains "$matched_sources" "retail-ops" "matched sources"
 assert_contains "$matched_sources" "physical-ops" "matched sources"
 assert_contains "$matched_joins" "plate" "matched joins"
 printf 'Matched watch committed %s\n%s\n%s\n' "$matched_query" "$matched_cypher" "$matched_joins"
-wait_for_slots || fail "The PostgreSQL replication slots did not become active."
-sleep 2
 stop_process "$stream_pid"
 stream_pid=""
 
+queries_before="$(journal_sql "SELECT count(*) FROM sentinel_authored_queries;" | tr -d '[:space:]')"
+vague_task="curbside-vague-$$"
+send_prompt "$vague_task" "$PROMPT_VAGUE" "$SECRETS/vague-events.sse"
+vague_status=0
+wait_for_pushback "$vague_task" "$SECRETS/vague-events.sse" || vague_status=$?
+stop_process "$stream_pid"
+stream_pid=""
+if [[ "$vague_status" -eq 2 ]]; then
+	cat "$SECRETS/vague-events.sse" >&2
+	fail "The unmapped prompt created a subscription."
+fi
+if [[ "$vague_status" -ne 0 ]]; then
+	cat "$SECRETS/vague-events.sse" >&2
+	fail "The unmapped prompt did not ask which available fields correspond to customer and waiting."
+fi
+if grep -F 'is active' "$SECRETS/vague-events.sse" >/dev/null; then
+	cat "$SECRETS/vague-events.sse" >&2
+	fail "The unmapped prompt claimed a watch."
+fi
+queries_after="$(journal_sql "SELECT count(*) FROM sentinel_authored_queries;" | tr -d '[:space:]')"
+if [[ "$queries_before" != "$queries_after" ]]; then
+	fail "The unmapped prompt committed a query."
+fi
+printf 'Unmapped prompt asked instead of subscribing.\n'
+
+wait_for_slots || fail "The PostgreSQL replication slots did not become active."
+sleep 2
+
+ready_id="$(psql_at retail "SELECT id FROM orders WHERE plate = 'A1234'" | tr -d '[:space:]')"
+[[ -n "$ready_id" ]] || fail "Plate A1234 has no order id."
 docker exec "$CONTAINER_NAME" psql -v ON_ERROR_STOP=1 -U sentinel -d retail \
 	-c "UPDATE orders SET status = 'ready' WHERE plate = 'A1234'" >/dev/null
-wait_for_diff "$ready_task" "$SECRETS/ready-replay.sse" "A1234" || {
+wait_for_diff "$ready_task" "$SECRETS/ready-replay.sse" "\"id\":$ready_id" || {
 	cat "$SECRETS/ready-replay.sse" >&2
-	fail "The ready-order watch did not emit a diff for A1234."
+	fail "The ready-order watch did not emit a diff for order $ready_id."
 }
-printf 'Ready watch emitted a diff for A1234.\n'
+printf 'Ready watch emitted a diff for order %s.\n' "$ready_id"
 
 mysql_at physical "UPDATE vehicles SET location = 'Curbside' WHERE plate = 'A1234'" >/dev/null
 if ! wait_for_diff "$matched_task" "$SECRETS/matched-replay.sse" "A1234"; then

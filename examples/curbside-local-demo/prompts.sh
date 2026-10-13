@@ -11,3 +11,6 @@ PROMPT_CURBSIDE='Tell me when a pickup vehicle is at the curb. Keep the watch fo
 PROMPT_MATCHED='Tell me when an order is ready for pickup and the vehicle with the same plate is at the curb. Keep the watch for 7 days.'
 
 PROMPT_DELAYED='Tell me when a vehicle has been waiting at the curb for 10 seconds and its order is still being prepared. Keep the watch for 7 days.'
+
+# "waiting" is not a stored field. The e2e must not turn this into a watch.
+PROMPT_VAGUE='Tell me when an order is ready and the customer is waiting. Keep the watch for 7 days.'

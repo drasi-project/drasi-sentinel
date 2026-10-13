@@ -60,7 +60,7 @@ public sealed class QueryWorkbench(
         new(ProfileSourceSchemaTool, "Sample a configured source and return property names plus stored example values from current rows, including a value that appears on only one row. Pass id. sampleLabels is an optional comma-separated label list. Use a stored example's exact spelling. A unique token or a unique abbreviation of one stored value is that example. A literal that matches no sample can be a future value. String comparison is case-sensitive.", [new AgentToolArgument("id", true), new AgentToolArgument("sampleLabels", false), new AgentToolArgument("limit", false)]),
         new(TestQueryTool, "Add the query under a temporary id, sample its rows, then remove it. Pass query and sources. This does not save the query. If it returns no rows, do not report that nothing was found. A future value the caller asked to watch can still be committed. " + JoinArgument, [new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false)]),
         new(GenerateQueryTool, "Validate a draft, or scaffold one when query is omitted. Tests it unless it is not Cypher. Pass commit_as, description, and ttl to save a query that tested without error, including a future value that is not present yet. commit_as is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. sources is required. " + JoinArgument, [new AgentToolArgument("query", false), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("label", false), new AgentToolArgument("commit_as", false), new AgentToolArgument("description", false), new AgentToolArgument("ttl", false)]),
-        new(AddQueryTool, "Save a tested Cypher query and register it. Pass id, query, sources, description, and ttl. id is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. A taken id is not replaced; the result Committed.Id may differ. The host binds the reaction. Then call subscribe_to_changes with Committed.Id and the same ttl. " + JoinArgument, [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("description", true), new AgentToolArgument("joins", false), new AgentToolArgument("ttl", true)]),
+        new(AddQueryTool, "Save a tested Cypher query and register it. Pass id, query, sources, description, and ttl. id is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. A taken id is not replaced; the result Committed.Id may differ. The host binds the reaction. Then call subscribe_to_changes with Committed.Id and the same ttl in this turn. Do not ask whether to start. " + JoinArgument, [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("description", true), new AgentToolArgument("joins", false), new AgentToolArgument("ttl", true)]),
         new(UpdateQueryTool, "Replace the text of an authored query that no watch is using. A watched query is not replaced. Pass id, query, and sources. Curated queries cannot be updated.", [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("description", false)]),
         new(ListQueriesTool, "List queries and whether each is running.", (string?)null),
         new(GetQueryResultsTool, "Return the current rows of a query. Pass id.", [new AgentToolArgument("id", true)]),
@@ -100,7 +100,110 @@ public sealed class QueryWorkbench(
             !literals.Any(literal => callerText.Contains(literal, StringComparison.OrdinalIgnoreCase)) &&
             item?.Examples.Any(example => callerText.Contains(example, StringComparison.OrdinalIgnoreCase)) != true)
             return $"Query '{queryId}' filters on {string.Join(", ", literals.Select(literal => "'" + literal + "'"))} and does not match this request. Build a new query and subscribe to the new id. Do not replace '{queryId}'.";
-        return null;
+        var described = string.Join(
+            " ",
+            new[] { covered, authored?.Description, item?.Description, item is null ? null : string.Join(" ", item.Examples) }
+                .Where(part => !string.IsNullOrWhiteSpace(part)));
+        var uncovered = UncoveredConditions(callerText, covered);
+        if (uncovered.Length == 0)
+            return null;
+        return $"Query '{queryId}' does not cover {string.Join(", ", uncovered)}. Do not subscribe and do not guess a mapping. Available fields: {await AvailableFieldsAsync(cancellationToken)}. Ask which of those labels, properties, or stored values correspond to the uncovered words.";
+    }
+
+    private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "and", "are", "at", "be", "been", "by", "for", "from", "has", "have",
+        "how", "in", "into", "is", "it", "its", "keep", "long", "me", "my", "not", "of",
+        "on", "or", "our", "please", "same", "tell", "that", "the", "their", "then",
+        "these", "this", "those", "to", "watch", "watching", "when", "with", "you", "your",
+        "day", "days", "hour", "hours", "minute", "minutes", "second", "seconds", "none",
+        "now", "will", "let", "know", "about", "just", "only", "also",
+    };
+
+    internal static string[] UncoveredConditions(string callerText, string covered)
+    {
+        var tokens = Regex.Matches(covered, "[A-Za-z]{4,}")
+            .Select(match => match.Value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var gaps = new List<string>();
+        foreach (Match match in Regex.Matches(
+            callerText,
+            @"\b([A-Za-z]{4,})\s+is\s+(?:still\s+)?(?:being\s+)?([A-Za-z]{4,})\b|\b(?:been|being)\s+([A-Za-z]{4,})\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var subject = match.Groups[1].Success ? match.Groups[1].Value : null;
+            var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
+            if (Stopwords.Contains(complement) || Covers(tokens, complement))
+                continue;
+            var place = Regex.Match(
+                callerText[match.Index..],
+                @"\b(?:at|in)\s+the\s+([A-Za-z]{4,})",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (place.Success && Covers(tokens, place.Groups[1].Value))
+                continue;
+            if (subject is not null && !Stopwords.Contains(subject) && !Covers(tokens, subject))
+                gaps.Add(subject);
+            gaps.Add(complement);
+        }
+
+        return gaps.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool Covers(IReadOnlyList<string> tokens, string word)
+    {
+        var lower = word.ToLowerInvariant();
+        foreach (var token in tokens)
+        {
+            if (token.Contains(lower, StringComparison.Ordinal) ||
+                lower.Contains(token, StringComparison.Ordinal) ||
+                token.StartsWith(lower, StringComparison.Ordinal) ||
+                lower.StartsWith(token, StringComparison.Ordinal) ||
+                (lower.Length >= 5 && token.Length >= 5 && token.StartsWith(lower[..5], StringComparison.Ordinal)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<string> AvailableFieldsAsync(CancellationToken cancellationToken)
+    {
+        var fields = new List<string>();
+        foreach (var id in sourceIds.OrderBy(item => item, StringComparer.Ordinal))
+        {
+            var schema = await runtime.SourceSchemaAsync(id, cancellationToken);
+            if (schema?["nodes"] is not JsonArray nodes)
+                continue;
+            foreach (var node in nodes)
+            {
+                var label = node?["label"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(label))
+                    continue;
+                var names = PropertyNames(node?["properties"] as JsonArray);
+                fields.Add(names.Length == 0 ? label : $"{label} ({string.Join(", ", names)})");
+            }
+        }
+
+        return fields.Count == 0
+            ? "no labels were reported"
+            : string.Join("; ", fields.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string[] PropertyNames(JsonArray? properties)
+    {
+        if (properties is null)
+            return [];
+        return properties
+            .Select(property => property switch
+            {
+                JsonObject obj => obj["name"]?.GetValue<string>(),
+                JsonValue value when value.TryGetValue<string>(out var name) => name,
+                _ => null,
+            })
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static bool Mentions(string text, string label)

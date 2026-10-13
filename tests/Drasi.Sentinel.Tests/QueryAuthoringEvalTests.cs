@@ -183,6 +183,12 @@ public sealed class QueryAuthoringEvalTests
             "case-sensitive",
             "subscribe_to_changes",
             "Do not invent source ids",
+            "uncovered words",
+            "was not deployed",
+            "Do not ask the caller whether to continue",
+            "not a substitute",
+            "Once every stated condition is mapped",
+            "Do not end with a question that asks whether to start",
         })
         {
             Assert.Contains(rule, enabled, StringComparison.Ordinal);
@@ -234,6 +240,100 @@ public sealed class QueryAuthoringEvalTests
             new Dictionary<string, string?> { ["query"] = "pickup-order-ready" });
         Assert.Contains("vehicles", rejected, StringComparison.Ordinal);
         Assert.Contains("query_rejected", rejected, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Subscribe_rejects_an_unmapped_condition_and_names_available_fields()
+    {
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger", "physical"], StringComparer.Ordinal);
+        await store.SaveAsync(new AuthoredQuery(
+            new QueryId("pickup-order-ready"),
+            "Ready orders.",
+            "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id",
+            ["ledger"],
+            [],
+            new Unbounded()), CancellationToken.None);
+        var runtime = new RecordingRuntime();
+        runtime.Schemas["ledger"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"status"},{"name":"plate"}]}],"relations":[]}""");
+        runtime.Schemas["physical"] = JsonNode.Parse("""{"nodes":[{"label":"vehicles","properties":[{"name":"location"},{"name":"plate"}]}],"relations":[]}""");
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        Assert.Null(await workbench.CoverageGapAsync("pickup-order-ready", "Tell me when an order is ready.", CancellationToken.None));
+        Assert.Null(await workbench.CoverageGapAsync("pickup-order-ready", "Tell me when a pickup order is ready for pickup.", CancellationToken.None));
+        var session = AgentToolSession.Create(
+            Unused(),
+            Principal(),
+            new("task", "message"),
+            CancellationToken.None,
+            workbench,
+            "Tell me when an order is ready and the customer is waiting.");
+        var rejected = await session.InvokeAsync(
+            AgentTurn.SubscribeTool,
+            new Dictionary<string, string?> { ["query"] = "pickup-order-ready" });
+        Assert.Contains("mapping_required", rejected, StringComparison.Ordinal);
+        Assert.Contains("customer", rejected, StringComparison.Ordinal);
+        Assert.Contains("waiting", rejected, StringComparison.Ordinal);
+        Assert.Contains("orders", rejected, StringComparison.Ordinal);
+        Assert.Contains("status", rejected, StringComparison.Ordinal);
+        Assert.Contains("vehicles", rejected, StringComparison.Ordinal);
+        Assert.Contains("location", rejected, StringComparison.Ordinal);
+
+        var guessed = await Authoring().AttemptJsonAsync(Commit(
+            "customer-waiting",
+            "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id",
+            "Ready orders.",
+            "Tell me when an order is ready and the customer is waiting."), CancellationToken.None);
+        Assert.Contains("uncovered words", guessed, StringComparison.Ordinal);
+        Assert.Contains("waiting", guessed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Committed", guessed, StringComparison.Ordinal);
+
+        var unseen = await Authoring().AttemptJsonAsync(Commit(
+            "held-shipment",
+            "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id",
+            "The caller asked about a stranded parcel.",
+            "Tell me when an order is open and the parcel is stranded."), CancellationToken.None);
+        Assert.Contains("uncovered words", unseen, StringComparison.Ordinal);
+        Assert.Contains("stranded", unseen, StringComparison.Ordinal);
+        Assert.DoesNotContain("Committed", unseen, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Deploy_failure_is_returned_and_does_not_keep_the_query()
+    {
+        var runtime = new RecordingRuntime
+        {
+            AddFailure = new InvalidOperationException("query engine rejected the query"),
+            Row = JsonNode.Parse("""{"id":"1","status":"ready"}""")!,
+        };
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger"], StringComparer.Ordinal);
+        runtime.Schemas["ledger"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"id"},{"name":"status"}]}],"relations":[]}""");
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        using var failed = JsonDocument.Parse(await workbench.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
+        {
+            ["id"] = "ready-orders",
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["description"] = "Ready orders.",
+            ["ttl"] = "none",
+        }, CancellationToken.None));
+        Assert.Contains("was not deployed", failed.RootElement.GetProperty("CommitSkippedReason").GetString(), StringComparison.Ordinal);
+        Assert.Contains("query engine rejected the query", failed.RootElement.GetProperty("CommitSkippedReason").GetString(), StringComparison.Ordinal);
+        Assert.False(failed.RootElement.TryGetProperty("Committed", out _));
+        Assert.Null(await store.FindAsync(new QueryId("ready-orders"), CancellationToken.None));
+        Assert.Empty(runtime.Added);
     }
 
     [Fact]

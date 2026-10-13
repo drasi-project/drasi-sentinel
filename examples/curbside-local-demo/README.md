@@ -91,4 +91,6 @@ docker exec drasi-sentinel-curbside-local-demo psql -v ON_ERROR_STOP=1 -U sentin
 Press Ctrl+C to stop Sentinel, Inspector, and both database containers.
 
 To run the ready and matched prompts against the configured model and check
-the diffs, run `./e2e.sh` from this directory.
+the diffs, run `./e2e.sh` from this directory. That run also sends "Tell me
+when an order is ready and the customer is waiting." The reply must ask which
+available fields correspond. It must not subscribe.

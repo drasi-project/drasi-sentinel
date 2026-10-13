@@ -88,8 +88,12 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
         return Task.FromResult(new QueryProbe(true, [row], null));
     }
 
+    public Exception? AddFailure { get; set; }
+
     public Task AddAsync(AuthoredQuery query, TimeSpan? readyTimeout, CancellationToken cancellationToken)
     {
+        if (AddFailure is not null)
+            throw AddFailure;
         if (Added.All(existing => existing.Id != query.Id))
             Added.Add(query);
         return Task.CompletedTask;

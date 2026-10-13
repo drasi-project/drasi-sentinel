@@ -429,6 +429,8 @@ public sealed class QueryAuthoring(
             return (literalSkip, null);
         if (AggregationOnly(query, callerText) is { } aggregation)
             return (aggregation, null);
+        if (MappingSkip(query, description, callerText) is { } mappingSkip)
+            return (mappingSkip, null);
         if (projectionSkip is not null)
             return (projectionSkip, null);
         if (probe is not { Ok: true })
@@ -442,7 +444,8 @@ public sealed class QueryAuthoring(
         var existing = await store.FindAsync(id, cancellationToken);
         if (existing is not null && Same(existing, authored))
         {
-            await runtime.AddAsync(existing, CommitTimeout, cancellationToken);
+            if (await DeployAsync(existing, cancellationToken) is { } existingFailure)
+                return (existingFailure, null);
             EnsureCatalog(existing);
             return (null, existing.Id.Value);
         }
@@ -454,18 +457,30 @@ public sealed class QueryAuthoring(
 
         authored = new AuthoredQuery(id, description, query, sources, joins, admitted);
         await store.SaveAsync(authored, cancellationToken);
-        try
-        {
-            await runtime.AddAsync(authored, CommitTimeout, cancellationToken);
-            catalog.Add(ToCatalogItem(authored, reaction));
-        }
-        catch
+        if (await DeployAsync(authored, cancellationToken) is { } failure)
         {
             await store.DeleteAsync(id, CancellationToken.None);
-            throw;
+            return (failure, null);
         }
 
+        catalog.Add(ToCatalogItem(authored, reaction));
         return (null, id.Value);
+    }
+
+    private async Task<string?> DeployAsync(AuthoredQuery query, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await runtime.AddAsync(query, CommitTimeout, cancellationToken);
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            var detail = string.IsNullOrWhiteSpace(exception.Message)
+                ? "The query could not be deployed."
+                : exception.Message;
+            return $"The query was not deployed: {detail}. Tell the caller this error. Do not say the watch is active and do not subscribe.";
+        }
     }
 
     private async Task<string> AllocateIdAsync(string requested, CancellationToken cancellationToken)
@@ -878,6 +893,16 @@ public sealed class QueryAuthoring(
         }
 
         return false;
+    }
+
+    private static string? MappingSkip(string query, string? description, string? callerText)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return null;
+        var uncovered = QueryWorkbench.UncoveredConditions(callerText, query);
+        if (uncovered.Length == 0)
+            return null;
+        return $"The query does not cover {string.Join(", ", uncovered)}. These are uncovered words. Do not commit a guessed mapping. Ask which available labels, properties, or stored values correspond to them.";
     }
 
     private static string? DurationSkip(string query, string? callerText)
