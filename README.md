@@ -20,9 +20,9 @@ dotnet test Drasi.Sentinel.slnx
 dotnet run --project src/Drasi.Sentinel.Host -- sentinel.yaml
 ```
 
-`./tests/query-authoring-eval.sh` scores the query tools without a model. Set
-`SENTINEL_QUERY_EVAL=1` and the Azure OpenAI endpoint and model variables to
-also score that configured model. The default test run does not call it.
+`./tests/query-authoring-eval.sh` scores the query tools without a model. To
+score the configured model, and to change the authoring instructions from a
+failure, see [Tune query authoring from the eval](docs/query-authoring-eval.md).
 
 The Agent Card is available at `/.well-known/agent-card.json`. It advertises
 `JSONRPC` with `capabilities.streaming: true`. Inspector v1 `ROLE_USER`
