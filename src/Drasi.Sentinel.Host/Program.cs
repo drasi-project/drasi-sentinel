@@ -13,12 +13,12 @@ if (args.Length == 0)
 var manifest = SentinelManifestLoader.Load(args[0]);
 var builder = WebApplication.CreateBuilder(args[1..]);
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<SqliteSentinelRepository>(_ =>
+builder.Services.AddSingleton<ISentinelRepository>(_ =>
     SqliteSentinelRepository.Create(SentinelDataDirectory.JournalPath(manifest.Directory, manifest.DataDirectory)));
 builder.Services.AddSingleton<IConversationRepository>(services =>
-    services.GetRequiredService<SqliteSentinelRepository>());
+    services.GetRequiredService<ISentinelRepository>());
 builder.Services.AddSingleton<IAuthoredQueryStore>(services =>
-    services.GetRequiredService<SqliteSentinelRepository>());
+    services.GetRequiredService<ISentinelRepository>());
 var liveCatalog = new LiveCatalog(manifest.SafeCatalog);
 builder.Services.AddSingleton(liveCatalog);
 builder.Services.AddSingleton<ITaskEventNotifier, TaskEventNotifier>();
@@ -137,7 +137,7 @@ if (manifest.A2aAuthentication is A2aJwtManifest)
     app.UseAuthentication();
     app.UseAuthorization();
 }
-await app.Services.GetRequiredService<SqliteSentinelRepository>()
+await app.Services.GetRequiredService<ISentinelRepository>()
     .InitializeAsync(app.Lifetime.ApplicationStopping);
 _ = app.Services.GetRequiredService<NativeResultIngestion>()
     .RunAsync(app.Lifetime.ApplicationStopping);

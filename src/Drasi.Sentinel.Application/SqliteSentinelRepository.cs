@@ -14,7 +14,7 @@ public static class SentinelDataDirectory
         Path.Combine(Resolve(manifestDirectory, configuredDataDirectory), SqliteSentinelRepository.FileName);
 }
 
-public sealed class SqliteSentinelRepository : IConversationRepository, IAuthoredQueryStore, IAsyncDisposable
+public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDisposable
 {
     public const string FileName = "journal.sqlite";
     public const string AuthoredQueriesFileName = "authored-queries.json";
@@ -63,6 +63,9 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
             subscription_id TEXT NOT NULL,
             receipt TEXT NOT NULL,
             PRIMARY KEY (subscription_id, receipt));
+        CREATE INDEX IF NOT EXISTS ix_sentinel_subscriptions_restorable
+            ON sentinel_subscriptions (created_at)
+            WHERE state IN ('Arming', 'Active', 'Degraded');
         """;
 
     private readonly string _path;

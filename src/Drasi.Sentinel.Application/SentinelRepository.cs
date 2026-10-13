@@ -3,6 +3,11 @@ using Drasi.Sentinel.Domain;
 
 namespace Drasi.Sentinel.Application;
 
+public interface ISentinelRepository : IConversationRepository, IAuthoredQueryStore
+{
+    Task InitializeAsync(CancellationToken cancellationToken);
+}
+
 public interface IConversationRepository
 {
     Task<ConversationTask> GetOrCreateTaskAsync(Principal principal, ConversationTaskId taskId, CancellationToken cancellationToken);
