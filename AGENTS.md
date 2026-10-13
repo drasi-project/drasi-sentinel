@@ -52,9 +52,10 @@ the prompts that ask the agent to build each watch.
 
 - A change watch is one durable A2A task with one curated subscription.
 - A subscription selects one query and the host-bound reaction only. Do not add
-  filters, confirmation codes, or model-selected destinations. An optional
-  operator webhook may copy each journaled native diff. It is not the
-  primary contract and the model does not choose it.
+  filters, confirmation codes, or model-selected destinations. A consuming agent
+  may register one push notification URL for that task with the standard A2A
+  push notification config methods. Streaming remains the primary contract, and
+  the model does not choose the URL.
 - When `service.query_authoring.enabled` is true, the agent may create a query
   against the manifest's sources. Sources stay curated. The model does not see
   connection settings, and the new query still becomes one task subscription.

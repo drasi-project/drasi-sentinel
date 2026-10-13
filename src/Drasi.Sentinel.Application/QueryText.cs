@@ -32,7 +32,7 @@ public static partial class QueryText
             blocking.Add(sql);
         if (UnsupportedClause(query) is { } unsupported)
             blocking.Add(unsupported);
-        if (MissingJoin(query, joinIds.Count) is { } join)
+        if (MissingJoin(query, schema, joinIds.Count) is { } join)
             warnings.Add(join);
 
         var knownLabels = schema.Nodes.Select(node => node.Label)
@@ -117,15 +117,30 @@ public static partial class QueryText
             ? "Continuous queries do not support ORDER BY. The result set is unordered and emits add, update, and delete diffs. Remove ORDER BY and sort in the consumer."
             : null;
 
-    private static string? MissingJoin(string query, int joinsCount)
+    private static string? MissingJoin(string query, SourceGraph schema, int joinsCount)
     {
-        if (joinsCount > 0)
+        if (joinsCount > 0 || UsesReportedRelation(query, schema))
             return null;
         var labels = NodeLabels(query);
-        return labels.Count < 2
-            ? null
-            : $"This query references {string.Join(", ", labels)} but declares no joins. A relational source has no relationship between labels, so a comma or multi-MATCH returns no rows. Declare joins and MATCH the synthetic relationship.";
+        if (labels.Count < 2 || !RelatesLabels(query))
+            return null;
+        if (schema.Relations.Count > 0)
+            return $"The schema reports relationships ({string.Join(", ", schema.Relations.Select(relation => relation.Label))}). MATCH a reported relationship if it connects these labels. Do not invent a join unless no reported relationship connects them.";
+        return $"This query references {string.Join(", ", labels)} but declares no joins. The schema did not report a relationship between these labels. Declare joins and MATCH that relationship. A comma or a second MATCH does not join.";
     }
+
+    private static bool UsesReportedRelation(string query, SourceGraph schema) =>
+        RelationshipPattern().Matches(query)
+            .Cast<System.Text.RegularExpressions.Match>()
+            .Any(match => schema.Relations.Any(relation => relation.Label.Equals(match.Groups[1].Value, StringComparison.OrdinalIgnoreCase)));
+
+    private static bool RelatesLabels(string query) =>
+        query.Contains(',', StringComparison.Ordinal)
+        || System.Text.RegularExpressions.Regex.Matches(query, @"\bMATCH\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count > 1
+        || RelationshipPattern().IsMatch(query)
+        || System.Text.RegularExpressions.Regex.IsMatch(
+            query,
+            @"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\s*=\s*[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*");
 
     private static IReadOnlyList<string> ReferencedLabels(string query) =>
         Distinct(ColonLabel().Matches(query));
@@ -219,6 +234,84 @@ public static partial class QueryText
     [System.Text.RegularExpressions.GeneratedRegex(@"\bJOIN\b[\s\S]*\bON\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex JoinOn();
 
+    [System.Text.RegularExpressions.GeneratedRegex(@"\[:\s*([A-Za-z_][A-Za-z0-9_]*)\s*\]")]
+    private static partial System.Text.RegularExpressions.Regex RelationshipPattern();
+
     [System.Text.RegularExpressions.GeneratedRegex(@"\bORDER\s+BY\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
     private static partial System.Text.RegularExpressions.Regex OrderBy();
+}
+
+public static class CallerDuration
+{
+    public readonly record struct Mention(string Amount, string Unit);
+
+    private static readonly System.Text.RegularExpressions.Regex Token = new(
+        @"\b(?<amount>\d+)\s+(?<unit>second|minute|hour|day)s?\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex Hold = new(
+        @"\b(been|waiting|waited|stays|stayed|remains|remained|holds|held|lasts|lasted|lasting|persists|persisted)\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex LifetimePhrase = new(
+        @"\bkeep (?:the|this) watch\b|\bttl\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex OnlyDuration = new(
+        @"^(?:for\s+)?\d+\s+(?:second|minute|hour|day)s?$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    public static Mention? Condition(string? text)
+    {
+        foreach (var (sentence, match) in Mentions(text))
+        {
+            if (IsCondition(sentence, match))
+                return new(match.Groups["amount"].Value, Plural(match.Groups["unit"].Value));
+        }
+
+        return null;
+    }
+
+    public static bool HasOnlyLifetime(string? text)
+    {
+        var any = false;
+        foreach (var (sentence, match) in Mentions(text))
+        {
+            any = true;
+            if (IsCondition(sentence, match))
+                return false;
+        }
+
+        return any;
+    }
+
+    private static IEnumerable<(string Sentence, System.Text.RegularExpressions.Match Match)> Mentions(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            yield break;
+        foreach (var sentence in text.Split(['.', '!', '?'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            foreach (System.Text.RegularExpressions.Match match in Token.Matches(sentence))
+                yield return (sentence, match);
+        }
+    }
+
+    private static bool IsCondition(string sentence, System.Text.RegularExpressions.Match match)
+    {
+        if (OnlyDuration.IsMatch(sentence.Trim()))
+            return false;
+        var before = sentence[..match.Index];
+        var lifetime = LifetimePhrase.Match(before);
+        if (lifetime.Success && !Hold.IsMatch(before[lifetime.Index..]))
+            return false;
+        if (Hold.IsMatch(before))
+            return true;
+        return System.Text.RegularExpressions.Regex.IsMatch(before, @"\bfor\s+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    private static string Plural(string unit) => unit.ToLowerInvariant() switch
+    {
+        "second" => "seconds",
+        "minute" => "minutes",
+        "hour" => "hours",
+        "day" => "days",
+        var other => other,
+    };
 }

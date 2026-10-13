@@ -63,6 +63,15 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
             subscription_id TEXT NOT NULL,
             receipt TEXT NOT NULL,
             PRIMARY KEY (subscription_id, receipt));
+        CREATE TABLE IF NOT EXISTS sentinel_push_configs (
+            owner_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            config_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            token TEXT NULL,
+            auth_scheme TEXT NULL,
+            auth_credentials TEXT NULL,
+            PRIMARY KEY (owner_id, task_id));
         CREATE INDEX IF NOT EXISTS ix_sentinel_subscriptions_restorable
             ON sentinel_subscriptions (created_at)
             WHERE state IN ('Arming', 'Active', 'Degraded');
@@ -116,6 +125,74 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
         await using var reader = await select.ExecuteReaderAsync(cancellationToken);
         await reader.ReadAsync(cancellationToken);
         return new(taskId, new(reader.GetString(0)), principal.Owner, Enum.Parse<ConversationTaskState>(reader.GetString(1)), ParseTime(reader.GetString(2)), ParseTime(reader.GetString(3)));
+    }
+
+    public async Task<bool> TaskExistsAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT 1 FROM sentinel_conversation_tasks WHERE owner_id=@owner AND task_id=@task LIMIT 1;
+            """;
+        Add(command, "@owner", owner.Value);
+        Add(command, "@task", taskId.Value);
+        return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    public async Task SetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, PushNotificationConfig config, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO sentinel_push_configs (
+                owner_id, task_id, config_id, url, token, auth_scheme, auth_credentials)
+            VALUES (@owner, @task, @id, @url, @token, @scheme, @credentials)
+            ON CONFLICT (owner_id, task_id) DO UPDATE SET
+                config_id = excluded.config_id,
+                url = excluded.url,
+                token = excluded.token,
+                auth_scheme = excluded.auth_scheme,
+                auth_credentials = excluded.auth_credentials;
+            """;
+        Add(command, "@owner", owner.Value);
+        Add(command, "@task", taskId.Value);
+        Add(command, "@id", config.Id);
+        Add(command, "@url", config.Url.ToString());
+        Add(command, "@token", (object?)config.Token ?? DBNull.Value);
+        Add(command, "@scheme", (object?)config.AuthScheme ?? DBNull.Value);
+        Add(command, "@credentials", (object?)config.AuthCredentials ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<PushNotificationConfig?> GetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT config_id, url, token, auth_scheme, auth_credentials
+            FROM sentinel_push_configs WHERE owner_id=@owner AND task_id=@task;
+            """;
+        Add(command, "@owner", owner.Value);
+        Add(command, "@task", taskId.Value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+        return new(
+            reader.GetString(0),
+            new Uri(reader.GetString(1)),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4));
+    }
+
+    public async Task DeletePushConfigAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM sentinel_push_configs WHERE owner_id=@owner AND task_id=@task;";
+        Add(command, "@owner", owner.Value);
+        Add(command, "@task", taskId.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<ConversationSubscription> GetOrCreateSubscriptionAsync(ConversationSubscription item, CancellationToken cancellationToken)

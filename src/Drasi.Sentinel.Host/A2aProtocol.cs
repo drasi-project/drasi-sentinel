@@ -19,7 +19,8 @@ public sealed record A2aMessageRequest(
     JsonElement RequestId,
     A2aUserMessage Message,
     bool UsesInspectorV1,
-    A2aStreamingMethod Method)
+    A2aStreamingMethod Method,
+    PushNotificationConfig? PushConfig = null)
 {
     public static A2aMessageRequest Parse(JsonElement request)
     {
@@ -82,7 +83,8 @@ public sealed record A2aMessageRequest(
             new A2aUserMessage(taskId, messageId, text),
             StringComparer.Ordinal.Equals(method.GetString(), "SendMessage") ||
             StringComparer.Ordinal.Equals(method.GetString(), "SendStreamingMessage"),
-            parsedMethod);
+            parsedMethod,
+            A2aPushNotification.ReadMessageConfig(parameters));
     }
 
     private static bool TryMethod(string? method, out A2aStreamingMethod parsed)

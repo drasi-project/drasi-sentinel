@@ -57,6 +57,20 @@ public static class A2aEndpoint
         {
             using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
             if (document.RootElement.TryGetProperty("id", out var id) && id.ValueKind is JsonValueKind.String or JsonValueKind.Number) requestId = id.Clone();
+            if (document.RootElement.TryGetProperty("method", out var methodElement) &&
+                methodElement.ValueKind == JsonValueKind.String &&
+                A2aPushNotification.IsMethod(methodElement.GetString()))
+            {
+                Principal pushPrincipal;
+                try { pushPrincipal = A2aPrincipalFactory.Create(context.User, authentication); }
+                catch (A2aProtocolException exception) { return Error(requestId, -32001, exception.Message, exception.Code, StatusCodes.Status401Unauthorized); }
+                return await A2aPushNotification.HandleAsync(
+                    document.RootElement,
+                    requestId,
+                    pushPrincipal,
+                    repository,
+                    context.RequestAborted);
+            }
             request = A2aMessageRequest.Parse(document.RootElement);
         }
         catch (JsonException) { return Error(null, -32700, "The request body must be valid JSON."); }
@@ -72,6 +86,7 @@ public static class A2aEndpoint
             {
                 var turn = new TaskTurnId(taskId.Value, request.Message.MessageId);
                 await repository.GetOrCreateTaskAsync(principal, taskId, context.RequestAborted);
+                await RememberPushConfigAsync(repository, principal, taskId, request, context.RequestAborted);
                 var priorAssistantTexts = await ConversationTurnHistory.LoadAssistantTextsAsync(
                     repository, principal.Owner, taskId, context.RequestAborted);
                 var response = await responder.RespondAsync(
@@ -84,6 +99,7 @@ public static class A2aEndpoint
             {
                 var turn = new TaskTurnId(taskId.Value, request.Message.MessageId);
                 await repository.GetOrCreateTaskAsync(principal, taskId, context.RequestAborted);
+                await RememberPushConfigAsync(repository, principal, taskId, request, context.RequestAborted);
                 await repository.AppendEventAsync(
                     principal.Owner,
                     new ConversationEvent(
@@ -122,6 +138,17 @@ public static class A2aEndpoint
         catch (AgentFailureException exception) when (exception.Failure == AgentFailure.CredentialUnavailable) { return Error(request.RequestId, -32003, exception.Message, "agent_credential_unavailable", StatusCodes.Status503ServiceUnavailable); }
         catch (AgentFailureException exception) when (exception.Failure == AgentFailure.ProviderUnavailable) { return Error(request.RequestId, -32003, exception.Message, "agent_provider_unavailable", StatusCodes.Status503ServiceUnavailable); }
         catch (SentinelException exception) { return Error(request.RequestId, -32002, exception.Message, exception.Code); }
+    }
+
+    private static async Task RememberPushConfigAsync(
+        IConversationRepository repository,
+        Principal principal,
+        ConversationTaskId taskId,
+        A2aMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (request.PushConfig is { } config)
+            await repository.SetPushConfigAsync(principal.Owner, taskId, config, cancellationToken);
     }
 
     private static long ResumeAfter(HttpContext context) =>

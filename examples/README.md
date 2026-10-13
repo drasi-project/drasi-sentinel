@@ -2,7 +2,8 @@
 
 The examples define sources, reactions, and, except for the curbside demo,
 curated continuous queries. They report changes on the A2A task stream. The
-local accounting demo also posts each native diff to a local webhook receiver.
+local accounting demo can capture those updates at `http://127.0.0.1:8082/`
+when the consuming agent registers that URL for the task.
 
 After a task has its subscription, ask for its current results. The agent
 returns a task-stream data artifact for that task's curated query; do not

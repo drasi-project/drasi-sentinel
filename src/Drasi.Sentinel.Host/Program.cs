@@ -22,13 +22,12 @@ builder.Services.AddSingleton<IAuthoredQueryStore>(services =>
 var liveCatalog = new LiveCatalog(manifest.SafeCatalog);
 builder.Services.AddSingleton(liveCatalog);
 builder.Services.AddSingleton<ITaskEventNotifier, TaskEventNotifier>();
-if (manifest.WebhookUrl is { } webhookUrl)
-    builder.Services.AddSingleton<IArtifactWebhook>(_ => new HttpArtifactWebhook(webhookUrl));
+builder.Services.AddSingleton<IPushNotificationSender, HttpPushNotification>();
 builder.Services.AddSingleton(services => new NativeResultIngestion(
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
     TimeProvider.System,
-    services.GetService<IArtifactWebhook>(),
+    services.GetRequiredService<IPushNotificationSender>(),
     liveCatalog.Catalog));
 builder.Services.AddSingleton<INativeResultIngestion>(services =>
     services.GetRequiredService<NativeResultIngestion>());

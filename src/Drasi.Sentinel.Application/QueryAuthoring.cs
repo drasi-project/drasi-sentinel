@@ -154,8 +154,11 @@ public sealed class QueryAuthoring(
     private static readonly Regex RelationshipType = new(
         @"\[:\s*(?<id>[A-Za-z_][A-Za-z0-9_]*)\s*\]",
         RegexOptions.CultureInvariant);
-    private static readonly Regex DurationRequest = new(
-        @"\b(\d+)\s+(second|minute|hour)s?\b",
+    private static readonly Regex RoundCue = new(
+        @"\b(round|rounded|rounding|whole number)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex BranchCue = new(
+        @"\b(otherwise|else)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex LiteralEquality = new(
         @"\b(?<variable>[A-Za-z_][A-Za-z0-9_]*)\.(?<property>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*'(?<literal>[^']*)'",
@@ -307,6 +310,17 @@ public sealed class QueryAuthoring(
         var description = Optional(arguments, "description")?.Trim() ?? existing.Description;
         var graph = await runtime.DescribeAsync(cancellationToken);
         var analysis = QueryText.Examine(query, graph, joins.Select(join => join.Id).ToArray());
+        if (UnrequestedFunction(query, Optional(arguments, "caller_text")) is { } functionSkip)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = functionSkip,
+                Hint = functionSkip,
+            }, Json);
+        }
+
         if (DurationSkip(query, Optional(arguments, "caller_text")) is { } durationSkip)
         {
             return JsonSerializer.Serialize(new
@@ -407,6 +421,8 @@ public sealed class QueryAuthoring(
             return ($"Unknown label: {string.Join(", ", analysis.UnknownLabels)}.", null);
         if (analysis.UnknownProperties.Count > 0)
             return ($"Unknown property: {string.Join(", ", analysis.UnknownProperties)}. Use a property name from the schema.", null);
+        if (UnrequestedFunction(query, callerText) is { } functionSkip)
+            return (functionSkip, null);
         if (DurationSkip(query, callerText) is { } durationSkip)
             return (durationSkip, null);
         if (literalSkip is not null)
@@ -723,16 +739,47 @@ public sealed class QueryAuthoring(
             var node = graph.Nodes.FirstOrDefault(item => item.Label.Equals(label, StringComparison.OrdinalIgnoreCase));
             if (node is null)
                 continue;
-            foreach (var property in node.Properties)
+            var identity = IdentityName(node);
+            if (identity is not null)
             {
-                if (!Regex.IsMatch(projection, $@"\b{Regex.Escape(property.Name)}\b", RegexOptions.CultureInvariant))
-                    missing.Add($"{label}.{property.Name}");
+                if (!Regex.IsMatch(projection, $@"\b{Regex.Escape(identity)}\b", RegexOptions.CultureInvariant))
+                    missing.Add($"{label}.{identity}");
+                continue;
             }
+
+            var projected = node.Properties.Any(property =>
+                Regex.IsMatch(projection, $@"\b{Regex.Escape(property.Name)}\b", RegexOptions.CultureInvariant)
+                && !Regex.IsMatch(query, $@"\b{Regex.Escape(property.Name)}\s*=\s*'", RegexOptions.CultureInvariant));
+            if (!projected && node.Properties.Count > 0)
+                missing.Add($"{label}.{node.Properties[0].Name}");
         }
 
         return missing.Count == 0
             ? null
-            : $"RETURN is missing {string.Join(", ", missing)}. Project every schema property for each matched label. Do not project the node variable. Commit again in this turn.";
+            : $"RETURN is missing the identity property {string.Join(", ", missing)}. Project that property. Do not project the other schema properties. Commit again in this turn.";
+    }
+
+    private static string? IdentityName(GraphNode node)
+    {
+        var id = node.Properties.FirstOrDefault(property => property.Name.Equals("id", StringComparison.OrdinalIgnoreCase));
+        if (id is not null)
+            return id.Name;
+        var suffixed = node.Properties.Where(property =>
+            property.Name.EndsWith("_id", StringComparison.OrdinalIgnoreCase)
+            || property.Name.EndsWith("Id", StringComparison.Ordinal)).ToArray();
+        return suffixed.Length == 1 ? suffixed[0].Name : null;
+    }
+
+    private static string? UnrequestedFunction(string query, string? callerText)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return null;
+        if (Regex.IsMatch(query, @"\bfloor\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            && !RoundCue.IsMatch(callerText))
+            return "The caller did not ask to round a number down. Remove floor(). Commit again in this turn.";
+        if (Regex.IsMatch(query, @"\bCASE\b", RegexOptions.CultureInvariant) && !BranchCue.IsMatch(callerText))
+            return "The caller did not ask for a conditional value. Remove CASE. Commit again in this turn.";
+        return null;
     }
 
     private static string? AggregationOnly(string query, string? callerText)
@@ -835,27 +882,18 @@ public sealed class QueryAuthoring(
 
     private static string? DurationSkip(string query, string? callerText)
     {
-        if (string.IsNullOrWhiteSpace(callerText))
+        if (CallerDuration.HasOnlyLifetime(callerText) && query.Contains("trueFor", StringComparison.OrdinalIgnoreCase))
+            return "The duration after keep the watch is ttl, not trueFor. Remove trueFor and pass that ttl. Commit again in this turn.";
+        if (CallerDuration.Condition(callerText) is not { } condition)
             return null;
-        var match = DurationRequest.Match(callerText);
-        if (!match.Success)
-            return null;
-        var amount = match.Groups[1].Value;
-        var key = match.Groups[2].Value.ToLowerInvariant() switch
-        {
-            "second" => "seconds",
-            "minute" => "minutes",
-            "hour" => "hours",
-            var unit => unit,
-        };
         if (!query.Contains("trueFor", StringComparison.OrdinalIgnoreCase))
-            return $"The caller asked for a condition that must hold for {amount} {key}. Use drasi.trueFor(<that condition>, duration({{ {key}: {amount} }})). A WHERE comparison does not wait. Commit again in this turn.";
+            return $"The caller asked for a condition that must hold for {condition.Amount} {condition.Unit}. Use drasi.trueFor(<that condition>, duration({{ {condition.Unit}: {condition.Amount} }})). A WHERE comparison does not wait. Commit again in this turn.";
         return Regex.IsMatch(
             query,
-            $@"duration\s*\(\s*\{{\s*{key}\s*:\s*{amount}\s*\}}",
+            $@"duration\s*\(\s*\{{\s*{condition.Unit}\s*:\s*{condition.Amount}\s*\}}",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
             ? null
-            : $"drasi.trueFor must use duration({{ {key}: {amount} }}), the duration the caller asked for. Commit again in this turn.";
+            : $"drasi.trueFor must use duration({{ {condition.Unit}: {condition.Amount} }}), the duration the caller asked for. Commit again in this turn.";
     }
 
     private static string? JoinSkipReason(string query, IReadOnlyList<QueryJoinSpec> joins, QueryAnalysis analysis)
@@ -863,6 +901,9 @@ public sealed class QueryAuthoring(
         if (joins.Count == 0 &&
             analysis.Warnings.FirstOrDefault(warning => warning.Contains("declares no joins", StringComparison.Ordinal)) is { } missingJoin)
             return missingJoin + " " + JoinRepair(query);
+        if (joins.Count == 0 &&
+            analysis.Warnings.FirstOrDefault(warning => warning.Contains("reported relationship", StringComparison.Ordinal)) is { } reported)
+            return reported;
         if (joins.Count == 0 &&
             analysis.UnknownLabels.FirstOrDefault(label => RelationshipIds(query).Contains(label, StringComparer.Ordinal)) is { } relationship)
             return $"'{relationship}' is a join id, not a node label. " + JoinRepair(query);

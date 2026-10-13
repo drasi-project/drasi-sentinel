@@ -1,4 +1,5 @@
 using Drasi.Sentinel.Application;
+using Drasi.Sentinel.Domain;
 using Microsoft.Data.Sqlite;
 
 namespace Drasi.Sentinel.Tests;
@@ -54,6 +55,34 @@ public sealed class SqliteSentinelRepositoryTests
                     plan.Add(reader.GetString(3));
                 Assert.Contains(plan, line => line.Contains("ix_sentinel_subscriptions_restorable", StringComparison.Ordinal));
             }
+        }
+        finally
+        {
+            TryDelete(directory);
+        }
+    }
+
+    [Fact]
+    public async Task Push_config_is_replaced_and_deleted_for_one_task()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "sentinel-push-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, SqliteSentinelRepository.FileName);
+        try
+        {
+            var repository = SqliteSentinelRepository.Create(path);
+            await repository.InitializeAsync(CancellationToken.None);
+            var principal = new Principal(new("tenant"), new("owner"));
+            await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
+            await repository.SetPushConfigAsync(principal.Owner, new("task"), new("first", new Uri("http://127.0.0.1:8082/"), "secret", null, null), CancellationToken.None);
+            await repository.SetPushConfigAsync(principal.Owner, new("task"), new("second", new Uri("http://127.0.0.1:8083/"), null, null, null), CancellationToken.None);
+
+            var stored = await repository.GetPushConfigAsync(principal.Owner, new("task"), CancellationToken.None);
+            Assert.Equal("second", stored!.Id);
+            Assert.Equal("http://127.0.0.1:8083/", stored.Url.ToString());
+
+            await repository.DeletePushConfigAsync(principal.Owner, new("task"), CancellationToken.None);
+            Assert.Null(await repository.GetPushConfigAsync(principal.Owner, new("task"), CancellationToken.None));
         }
         finally
         {

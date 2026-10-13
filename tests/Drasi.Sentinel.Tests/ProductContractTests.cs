@@ -64,7 +64,7 @@ public sealed class ProductContractTests
 
         var root = card.RootElement;
         Assert.True(root.GetProperty("capabilities").GetProperty("streaming").GetBoolean());
-        Assert.False(root.GetProperty("capabilities").GetProperty("pushNotifications").GetBoolean());
+        Assert.True(root.GetProperty("capabilities").GetProperty("pushNotifications").GetBoolean());
         var binding = Assert.Single(root.GetProperty("supportedInterfaces").EnumerateArray());
         Assert.Equal("JSONRPC", binding.GetProperty("protocolBinding").GetString());
         Assert.False(binding.TryGetProperty("extensions", out _));
@@ -106,6 +106,7 @@ public sealed class ProductContractTests
         var description = card.RootElement.GetProperty("description").GetString();
         Assert.Contains("message/stream", description);
         Assert.Contains("tasks/subscribe", description);
+        Assert.Contains("tasks/pushNotificationConfig/set", description);
         Assert.Contains("native_query_diff", description);
         Assert.DoesNotContain("message/stream", skills[0].GetProperty("description").GetString());
         Assert.Contains("not a second watch", skills[1].GetProperty("description").GetString());

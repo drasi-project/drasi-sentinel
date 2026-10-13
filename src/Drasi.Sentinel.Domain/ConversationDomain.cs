@@ -62,6 +62,13 @@ public sealed record ConversationEvent(
     string Content,
     DateTimeOffset OccurredAt);
 
+public sealed record PushNotificationConfig(
+    string Id,
+    Uri Url,
+    string? Token,
+    string? AuthScheme,
+    string? AuthCredentials);
+
 public sealed class NativeQueryDiff
 {
     public NativeQueryDiff(

@@ -64,6 +64,100 @@ public sealed class QueryAuthoringEvalTests
     }
 
     [Fact]
+    public void A_reported_relationship_is_not_treated_as_a_missing_join()
+    {
+        var schema = new SourceGraph(
+            [
+                new GraphNode("orders", [new GraphProperty("id", "string")], ["ledger"]),
+                new GraphNode("payments", [new GraphProperty("order_id", "string")], ["ledger"]),
+            ],
+            [new GraphRelation("PAID", "payments", [], ["ledger"])],
+            []);
+        var used = QueryText.Examine(
+            "MATCH (o:orders)-[:PAID]->(p:payments) RETURN o.id AS id, p.order_id AS order_id",
+            schema,
+            []);
+        Assert.DoesNotContain(used.Warnings, warning => warning.Contains("declares no joins", StringComparison.Ordinal));
+        Assert.DoesNotContain(used.Warnings, warning => warning.Contains("no relationship", StringComparison.OrdinalIgnoreCase));
+
+        var ignored = QueryText.Examine("MATCH (o:orders), (p:payments) RETURN o.id AS id", schema, []);
+        Assert.Contains("reported relationship", Assert.Single(ignored.Warnings), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("declares no joins", ignored.Warnings[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_watch_lifetime_is_not_true_for_and_a_condition_duration_still_is()
+    {
+        var authoring = Authoring();
+        var kept = JsonDocument.Parse(await authoring.AttemptJsonAsync(Commit(
+            "open-orders",
+            "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id, n.status AS status",
+            "Open orders.",
+            "Tell me when an order is open. Keep the watch for 7 days."), CancellationToken.None));
+        Assert.Equal("open-orders", kept.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+
+        var waiting = await authoring.AttemptJsonAsync(Commit(
+            "open-waiting",
+            "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id, n.status AS status",
+            "Orders open for ten seconds.",
+            "Tell me when an order has been open for 10 seconds. Keep the watch for 7 days."), CancellationToken.None);
+        Assert.Contains("trueFor", waiting, StringComparison.Ordinal);
+        Assert.Contains("seconds: 10", waiting, StringComparison.Ordinal);
+        Assert.DoesNotContain("days: 7", waiting, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Floor_and_case_are_rejected_unless_the_caller_asked()
+    {
+        var authoring = Authoring();
+        var unasked = await authoring.AttemptJsonAsync(Commit(
+            "rounded",
+            "MATCH (n:orders) RETURN n.id AS id, floor(n.status) AS status",
+            "Rounded orders.",
+            "Tell me when an order changes."), CancellationToken.None);
+        Assert.Contains("did not ask to round", unasked, StringComparison.Ordinal);
+
+        var asked = JsonDocument.Parse(await authoring.AttemptJsonAsync(Commit(
+            "rounded",
+            "MATCH (n:orders) RETURN n.id AS id, floor(n.status) AS level",
+            "Rounded orders.",
+            "Round that level down to a whole number."), CancellationToken.None));
+        Assert.Equal("rounded", asked.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+    }
+
+    [Fact]
+    public async Task A_wide_label_commits_without_projecting_every_property()
+    {
+        var runtime = new RecordingRuntime
+        {
+            Graph = new SourceGraph(
+                [new GraphNode("orders", [
+                    new GraphProperty("id", "string"),
+                    new GraphProperty("status", "string"),
+                    new GraphProperty("notes", "string"),
+                    new GraphProperty("extra", "string"),
+                ], ["ledger"])],
+                [],
+                []),
+        };
+        var authoring = new QueryAuthoring(
+            runtime,
+            new InMemoryAuthoredQueryStore(),
+            new LiveCatalog(QueryAuthoringEvalSupport.Catalog()),
+            new HashSet<string>(["ledger"], StringComparer.Ordinal),
+            new ReactionId("notify"));
+        var committed = JsonDocument.Parse(await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'open' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "open-id",
+            ["description"] = "Open order ids.",
+            ["caller_text"] = "Tell me when an order is open.",
+        }, CancellationToken.None));
+        Assert.Equal("open-id", committed.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+    }
+
+    [Fact]
     public void Skill_states_the_rules_the_eval_depends_on_only_when_authoring_is_enabled()
     {
         var catalog = Catalog();
@@ -232,13 +326,21 @@ public sealed class QueryAuthoringEvalTests
             (await store.FindAsync(new QueryId("pickup-order-ready"), CancellationToken.None))!.Cypher);
     }
 
-    private static Dictionary<string, string?> Commit(string id, string query, string description) => new()
+    private static Dictionary<string, string?> Commit(string id, string query, string description, string? callerText = null) => new()
     {
         ["query"] = query,
         ["sources"] = "ledger",
         ["commit_as"] = id,
         ["description"] = description,
+        ["caller_text"] = callerText,
     };
+
+    private static QueryAuthoring Authoring() => new(
+        new RecordingRuntime(),
+        new InMemoryAuthoredQueryStore(),
+        new LiveCatalog(QueryAuthoringEvalSupport.Catalog()),
+        new HashSet<string>(["ledger"], StringComparer.Ordinal),
+        new ReactionId("notify"));
 
     [Fact]
     public async Task Commit_rejects_a_phrase_when_the_stored_value_is_in_the_sample()
@@ -526,7 +628,7 @@ public sealed class QueryAuthoringEvalTests
         var description = card.RootElement.GetProperty("description").GetString();
         Assert.Contains("describe that change", description);
         Assert.Contains("Do not send Cypher", description);
-        Assert.False(card.RootElement.GetProperty("capabilities").GetProperty("pushNotifications").GetBoolean());
+        Assert.True(card.RootElement.GetProperty("capabilities").GetProperty("pushNotifications").GetBoolean());
     }
 
     private static SourceGraph OrdersGraph() => new(

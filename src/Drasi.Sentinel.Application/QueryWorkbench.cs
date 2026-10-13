@@ -50,17 +50,14 @@ public sealed class QueryWorkbench(
     };
 
     private static readonly Regex Identifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
-    private static readonly Regex DurationRequest = new(
-        @"\b(\d+)\s+(second|minute|hour)s?\b",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     private static readonly Regex QuotedLiteral = new(@"'([^']+)'", RegexOptions.CultureInvariant);
-    private const string JoinArgument = "For two labels, joins is required JSON: [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}]. Then MATCH (a:LabelA)-[:LINK]->(b:LabelB). A comma does not join.";
+    private const string JoinArgument = "If a schema relation connects the labels, MATCH it and do not pass joins for that hop. Otherwise pass one joins entry for that hop: [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}]. Then MATCH (a:LabelA)-[:LINK]->(b:LabelB). A comma does not join. The id does not have to be LINK.";
 
     public IReadOnlyList<AgentTool> Tools { get; } =
     [
         new(GetSourceSchemaTool, "Get labels and properties for one configured source. Pass id. If the schema API returns nothing, this samples an unlabeled match and reads labels from the returned nodes. Use those labels. Do not invent labels.", [new AgentToolArgument("id", true)]),
         new(GetGraphSchemaTool, "Get the merged schema. A source that omits a schema is sampled with an unlabeled match. Use every returned label. Do not copy a label onto a source that did not return it.", (string?)null),
-        new(ProfileSourceSchemaTool, "Sample a configured source and return property names plus stored example values from current rows, including a value that appears on only one row. Pass id. sampleLabels is an optional comma-separated label list. Use one of those examples for a filter. Do not write the caller's phrase or a shorter form when an example is the stored value. String comparison is case-sensitive.", [new AgentToolArgument("id", true), new AgentToolArgument("sampleLabels", false), new AgentToolArgument("limit", false)]),
+        new(ProfileSourceSchemaTool, "Sample a configured source and return property names plus stored example values from current rows, including a value that appears on only one row. Pass id. sampleLabels is an optional comma-separated label list. Use a stored example's exact spelling. A unique token or a unique abbreviation of one stored value is that example. A literal that matches no sample can be a future value. String comparison is case-sensitive.", [new AgentToolArgument("id", true), new AgentToolArgument("sampleLabels", false), new AgentToolArgument("limit", false)]),
         new(TestQueryTool, "Add the query under a temporary id, sample its rows, then remove it. Pass query and sources. This does not save the query. If it returns no rows, do not report that nothing was found. A future value the caller asked to watch can still be committed. " + JoinArgument, [new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false)]),
         new(GenerateQueryTool, "Validate a draft, or scaffold one when query is omitted. Tests it unless it is not Cypher. Pass commit_as, description, and ttl to save a query that tested without error, including a future value that is not present yet. commit_as is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. sources is required. " + JoinArgument, [new AgentToolArgument("query", false), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("label", false), new AgentToolArgument("commit_as", false), new AgentToolArgument("description", false), new AgentToolArgument("ttl", false)]),
         new(AddQueryTool, "Save a tested Cypher query and register it. Pass id, query, sources, description, and ttl. id is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. A taken id is not replaced; the result Committed.Id may differ. The host binds the reaction. Then call subscribe_to_changes with Committed.Id and the same ttl. " + JoinArgument, [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("description", true), new AgentToolArgument("joins", false), new AgentToolArgument("ttl", true)]),
@@ -92,7 +89,7 @@ public sealed class QueryWorkbench(
         var missing = labels.Where(label => !covered.Contains(label, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (missing.Length > 0)
             return $"Query '{queryId}' does not cover {string.Join(", ", missing)}. It is only part of the request. Build a new query that includes those labels, commit it, then subscribe to the new id. Do not reuse the narrower query.";
-        if (DurationRequest.IsMatch(callerText) && !covered.Contains("trueFor", StringComparison.OrdinalIgnoreCase))
+        if (CallerDuration.Condition(callerText) is not null && !covered.Contains("trueFor", StringComparison.OrdinalIgnoreCase))
             return $"Query '{queryId}' does not wait for the duration in this request. Build a new query and subscribe to the new id. Do not replace '{queryId}'.";
         var literals = QuotedLiteral.Matches(covered)
             .Select(match => match.Groups[1].Value)

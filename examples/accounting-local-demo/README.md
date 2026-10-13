@@ -33,10 +33,11 @@ subscription is active, run its printed
 marks the seeded unpaid invoice paid, which adds it to the result set, and
 drives PostgreSQL CDC. Each native result diff
 is delivered as an A2A JSON data artifact, retaining its type and raw JSON
-data, before/after values, grouping keys, and metadata when supplied. The
-same JSON is posted to `http://127.0.0.1:8082/` and appended to
-`secrets/webhook-events.jsonl`. That post is optional and is not a second
-watch. You can
+data, before/after values, grouping keys, and metadata when supplied.
+`http://127.0.0.1:8082/` is a local capture the consuming agent can register
+for that task with `tasks/pushNotificationConfig/set`. Until it does, the
+capture file `secrets/capture-events.jsonl` stays empty. Streaming remains
+the primary delivery. You can
 also run the standard streaming test client from the repository root:
 
 ```bash

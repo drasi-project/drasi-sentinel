@@ -22,6 +22,10 @@ public interface IConversationRepository
     Task<IReadOnlyList<ConversationEvent>> ReadEventsAsync(OwnerId owner, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken);
     Task<TaskEventSequence> ReadLatestEventSequenceAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
     Task AppendAssistantArtifactAsync(Principal principal, ConversationTaskId taskId, string content, CancellationToken cancellationToken);
+    Task<bool> TaskExistsAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
+    Task SetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, PushNotificationConfig config, CancellationToken cancellationToken);
+    Task<PushNotificationConfig?> GetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
+    Task DeletePushConfigAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
 }
 
 public interface ITaskEventNotifier
@@ -99,6 +103,7 @@ public sealed class InMemorySentinelRepository : IConversationRepository
     private readonly ConcurrentDictionary<(OwnerId, ConversationTaskId, SubscriptionRequestKey), SubscriptionId> _requests = new();
     private readonly ConcurrentDictionary<(OwnerId Owner, ConversationTaskId Task), List<ConversationEvent>> _events = new();
     private readonly ConcurrentDictionary<ConversationTaskId, SemaphoreSlim> _gates = new();
+    private readonly ConcurrentDictionary<(OwnerId Owner, ConversationTaskId Task), PushNotificationConfig> _pushConfigs = new();
     private readonly HashSet<(SubscriptionId Subscription, string Receipt)> _diffReceipts = [];
 
     private static bool IsRestorable(ConversationSubscription subscription) =>
@@ -200,6 +205,24 @@ public sealed class InMemorySentinelRepository : IConversationRepository
     {
         await GetOrCreateTaskAsync(principal, taskId, cancellationToken);
         await AppendEventAsync(principal.Owner, new(taskId, default, ConversationEventKind.AssistantArtifact, null, content, DateTimeOffset.UtcNow), cancellationToken);
+    }
+
+    public Task<bool> TaskExistsAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken) =>
+        Task.FromResult(_tasks.ContainsKey((owner, taskId)));
+
+    public Task SetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, PushNotificationConfig config, CancellationToken cancellationToken)
+    {
+        _pushConfigs[(owner, taskId)] = config;
+        return Task.CompletedTask;
+    }
+
+    public Task<PushNotificationConfig?> GetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken) =>
+        Task.FromResult(_pushConfigs.TryGetValue((owner, taskId), out var config) ? config : null);
+
+    public Task DeletePushConfigAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken)
+    {
+        _pushConfigs.TryRemove((owner, taskId), out _);
+        return Task.CompletedTask;
     }
 
     private SemaphoreSlim Gate(ConversationTaskId taskId) => _gates.GetOrAdd(taskId, static _ => new(1, 1));

@@ -52,8 +52,13 @@ process reopens the indexes, reattaches each watch that has not ended on its
 stored reaction id, and then starts sources. A change the source or the query
 outbox still holds is written to that watch's journal.
 
-Every native query diff appends an A2A JSON data artifact to that journal. If `service.webhook.url` is set, the same JSON is
-also posted to that URL after the journal write. Each artifact retains the native diff type, raw JSON
+Every native query diff appends an A2A JSON data artifact to that journal. A consuming
+agent may register one push notification URL for that task with
+`tasks/pushNotificationConfig/set`, or on the opening `message/stream` as
+`configuration.taskPushNotificationConfig`. Each later diff is posted to that
+URL as an `artifactUpdate`. A failed post does not drop the journaled artifact.
+Streaming remains the primary delivery, and the model does not choose the URL.
+Each artifact retains the native diff type, raw JSON
 data, before/after values, grouping keys, and metadata when supplied, alongside
 its subscription, query, reaction, and occurrence time. `queryDescription` is the catalog description of that query.
 

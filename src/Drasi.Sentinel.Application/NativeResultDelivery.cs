@@ -7,9 +7,9 @@ using Drasi.Sentinel.Domain;
 
 namespace Drasi.Sentinel.Application;
 
-public interface IArtifactWebhook
+public interface IPushNotificationSender
 {
-    Task DeliverAsync(string artifactJson, CancellationToken cancellationToken);
+    Task DeliverAsync(PushNotificationConfig config, ConversationEvent observation, CancellationToken cancellationToken);
 }
 
 public interface INativeResultIngestion
@@ -24,7 +24,7 @@ public sealed class NativeResultIngestion(
     IConversationRepository repository,
     ITaskEventNotifier notifier,
     TimeProvider timeProvider,
-    IArtifactWebhook? webhook = null,
+    IPushNotificationSender? pushNotifications = null,
     SafeCatalog? catalog = null) : INativeResultIngestion
 {
     private static readonly JsonSerializerOptions ArtifactJsonOptions = new()
@@ -112,11 +112,14 @@ public sealed class NativeResultIngestion(
         if (persisted is null)
             return;
         notifier.Notify(persisted.TaskId);
-        if (webhook is null)
+        if (pushNotifications is null)
+            return;
+        var config = await repository.GetPushConfigAsync(subscription.Owner, subscription.TaskId, CancellationToken.None);
+        if (config is null)
             return;
         try
         {
-            await webhook.DeliverAsync(persisted.Content, CancellationToken.None);
+            await pushNotifications.DeliverAsync(config, persisted, CancellationToken.None);
         }
         catch (Exception)
         {

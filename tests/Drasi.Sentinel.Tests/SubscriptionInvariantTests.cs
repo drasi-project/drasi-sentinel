@@ -156,25 +156,39 @@ public sealed class SubscriptionInvariantTests
     }
 
     [Fact]
-    public async Task Webhook_receives_the_journaled_diff_and_a_failure_does_not_drop_it()
+    public async Task Push_notification_posts_only_the_registered_task_and_a_failure_does_not_drop_the_diff()
     {
         var repository = new InMemorySentinelRepository();
         var principal = Principal();
         await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
+        await repository.GetOrCreateTaskAsync(principal, new("other"), CancellationToken.None);
         var subscription = await repository.GetOrCreateSubscriptionAsync(
-            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Active, new("reaction-webhook"), DateTimeOffset.UtcNow, new Unbounded()),
+            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Active, new("reaction-one"), DateTimeOffset.UtcNow, new Unbounded()),
             CancellationToken.None);
-        var webhook = new RecordingWebhook();
-        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System, webhook);
+        var other = await repository.GetOrCreateSubscriptionAsync(
+            new(new(Guid.NewGuid()), new("other"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("other")), SubscriptionState.Active, new("reaction-two"), DateTimeOffset.UtcNow, new Unbounded()),
+            CancellationToken.None);
+        await repository.SetPushConfigAsync(
+            principal.Owner,
+            new("task"),
+            new("cfg", new Uri("http://127.0.0.1:8082/"), "secret", null, null),
+            CancellationToken.None);
+        var push = new RecordingPush();
+        var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System, push);
 
+        await ingestion.IngestAsync(other.NativeSubscriptionId, Diff("Add", "entity-200", "other"), CancellationToken.None);
         await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("Add", "entity-200", "one"), CancellationToken.None);
-        webhook.Fail = true;
+        push.Fail = true;
         await ingestion.IngestAsync(subscription.NativeSubscriptionId, Diff("Update", "entity-200", "two"), CancellationToken.None);
 
-        Assert.Equal(2, webhook.Bodies.Count);
-        Assert.Contains("native_query_diff", webhook.Bodies[0]);
+        Assert.Equal(2, push.Deliveries.Count);
+        Assert.All(push.Deliveries, delivery => Assert.Equal("http://127.0.0.1:8082/", delivery.Url));
+        Assert.Contains("native_query_diff", push.Deliveries[0].Content);
         Assert.Equal(2, (await repository.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None))
             .Count(item => item.Kind == ConversationEventKind.Observation));
+        Assert.Single(
+            await repository.ReadEventsAsync(principal.Owner, new("other"), new(0), 10, CancellationToken.None),
+            item => item.Kind == ConversationEventKind.Observation);
     }
 
     [Fact]
@@ -319,14 +333,14 @@ public sealed class SubscriptionInvariantTests
         new Dictionary<QueryId, QueryCatalogItem> { [new("query")] = new(new("query"), "Reports configured changes.", new HashSet<ReactionId> { new("reaction") }, []) },
         new Dictionary<ReactionId, ReactionCatalogItem> { [new("reaction")] = new(new("reaction")) });
 
-    private sealed class RecordingWebhook : IArtifactWebhook
+    private sealed class RecordingPush : IPushNotificationSender
     {
         public bool Fail { get; set; }
-        public List<string> Bodies { get; } = [];
-        public Task DeliverAsync(string artifactJson, CancellationToken cancellationToken)
+        public List<(string Url, string Content)> Deliveries { get; } = [];
+        public Task DeliverAsync(PushNotificationConfig config, ConversationEvent observation, CancellationToken cancellationToken)
         {
-            Bodies.Add(artifactJson);
-            return Fail ? Task.FromException(new HttpRequestException("webhook unavailable")) : Task.CompletedTask;
+            Deliveries.Add((config.Url.ToString(), observation.Content));
+            return Fail ? Task.FromException(new HttpRequestException("push unavailable")) : Task.CompletedTask;
         }
     }
 

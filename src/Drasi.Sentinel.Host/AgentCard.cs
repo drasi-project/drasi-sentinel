@@ -52,7 +52,7 @@ public static class AgentCard
                 protocolVersion = "1.0",
             },
         },
-        ["capabilities"] = new { streaming = true, pushNotifications = false },
+        ["capabilities"] = new { streaming = true, pushNotifications = true },
         ["defaultInputModes"] = new[] { "text/plain" },
         ["defaultOutputModes"] = new[] { "text/plain", "application/json" },
         ["skills"] = Skills(catalog, queryAuthoring),
@@ -105,9 +105,9 @@ public static class AgentCard
 
     private const string ConsumerContract =
         "One change watch is one durable A2A task and one curated subscription. A second watch needs a new task. Sending another watch on the same task is rejected. The assistant asks how long to keep the watch when the message does not say. The answer is another message on the same task.\n\n" +
-        "Read this description once, then pick a skill. A skill tagged continuous-query is one watch. Its description says what is watched. Its examples are the utterances that select it. Send one example as the whole user text. Do not send the skill id, a reaction id, Cypher, a source name, a filter, a confirmation code, a destination, or a webhook. The host binds one curated reaction. You do not choose it.\n\n" +
+        "Read this description once, then pick a skill. A skill tagged continuous-query is one watch. Its description says what is watched. Its examples are the utterances that select it. Send one example as the whole user text. Do not send the skill id, a reaction id, Cypher, a source name, a filter, a confirmation code, a destination, or a push URL. The host binds one curated reaction. You do not choose it.\n\n" +
         "The skill current-task-results is not a watch. Send its example only on the task a watch already opened. It returns the current rows for that task's query.\n\n" +
-        "POST JSON-RPC 2.0 to the url of the supportedInterfaces entry whose protocolBinding is JSONRPC. Use Content-Type application/json and Accept text/event-stream. capabilities.streaming is true and capabilities.pushNotifications is false. Do not register a push URL. Use method message/stream to send a message. Use method tasks/subscribe to reconnect. Do not use message/send.\n\n" +
+        "POST JSON-RPC 2.0 to the url of the supportedInterfaces entry whose protocolBinding is JSONRPC. Use Content-Type application/json and Accept text/event-stream. capabilities.streaming is true and capabilities.pushNotifications is true. Streaming is the primary delivery. Use method message/stream to send a message. Use method tasks/subscribe to reconnect. Do not use message/send. To receive the same artifact updates without holding the stream, POST method tasks/pushNotificationConfig/set with that taskId and an absolute http or https url, or set configuration.taskPushNotificationConfig on the opening message/stream. That url belongs to that task only. The model does not choose it.\n\n" +
         "To open a watch, choose a taskId and a messageId. POST method message/stream. Set message.role to user, message.taskId to that taskId, and message.messageId to that messageId. message.parts must be one object whose mediaType is text/plain and whose text is one example from the chosen skill. Keep the response open. Later changes arrive on this stream.\n\n" +
         "Each SSE event has an id line and a data line. The id is a decimal sequence. Keep the last id you applied. data is a JSON-RPC result. Read result.kind.\n\n" +
         "A status-update is not a change. An artifact-update is an output. A change is a part whose kind is data and whose data.type is native_query_diff. queryDescription is the catalog description of that query. diffType Add means the row entered the result set. diffType Update means a row still in the set changed. diffType Delete means the row left the result set. data is the row when present. before and after are present only when the host supplied them. Do not send another request to fill a missing field. Text parts are status, not changes.\n\n" +

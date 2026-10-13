@@ -32,7 +32,6 @@ public sealed class SentinelManifest
         SafeCatalog safeCatalog,
         ExecutableCatalog executableCatalog,
         string directory,
-        Uri? webhookUrl,
         bool queryAuthoringEnabled,
         IReadOnlyList<string> plugins,
         SecretStoreManifest? secretStore,
@@ -45,7 +44,6 @@ public sealed class SentinelManifest
         SafeCatalog = safeCatalog;
         ExecutableCatalog = executableCatalog;
         Directory = directory;
-        WebhookUrl = webhookUrl;
         QueryAuthoringEnabled = queryAuthoringEnabled;
         Plugins = plugins;
         SecretStore = secretStore;
@@ -57,7 +55,6 @@ public sealed class SentinelManifest
     public ServiceProfile Profile { get; }
     public A2aAuthenticationManifest A2aAuthentication { get; }
     public SafeCatalog SafeCatalog { get; }
-    public Uri? WebhookUrl { get; }
     public bool QueryAuthoringEnabled { get; }
     public IReadOnlyList<string> Plugins { get; }
     internal SecretStoreManifest? SecretStore { get; }
@@ -113,7 +110,6 @@ public static class SentinelManifestLoader
         var agent = ReadAgent(root);
         var service = RequireMapping(Required(root, "service", "manifest"), "service");
         var profile = ReadProfile(service);
-        var webhookUrl = ReadWebhook(service);
         var queryAuthoringEnabled = ReadQueryAuthoring(service);
         var ttlPolicy = ReadMaxTtl(service);
         var dataDirectory = ReadDataDirectory(service, manifestPath);
@@ -166,7 +162,6 @@ public static class SentinelManifestLoader
                     query => new ExecutableQuery(query.Key, query.Value.Cypher, query.Value.SourceIds))),
             Path.GetDirectoryName(Path.GetFullPath(manifestPath))
                 ?? throw new ManifestLoadException("The manifest path has no parent directory."),
-            webhookUrl,
             queryAuthoringEnabled,
             plugins,
             secretStore?.Manifest,
@@ -415,7 +410,7 @@ public static class SentinelManifestLoader
 
     private static ServiceProfile ReadProfile(YamlMappingNode service)
     {
-        RequireOnlyKeys(service, "service", "profile", "a2a", "webhook", "query_authoring", "data", "max_ttl");
+        RequireOnlyKeys(service, "service", "profile", "a2a", "query_authoring", "data", "max_ttl");
         return RequiredScalar(service, "profile", "service") switch
         {
             "demo" => ServiceProfile.Demo,
@@ -424,18 +419,6 @@ public static class SentinelManifestLoader
             _ => throw new ManifestLoadException(
                 "service.profile must be one of 'demo', 'development', or 'production'."),
         };
-    }
-
-    private static Uri? ReadWebhook(YamlMappingNode service)
-    {
-        if (!service.Children.TryGetValue(new YamlScalarNode("webhook"), out var node))
-            return null;
-        var webhook = RequireMapping(node, "service.webhook");
-        RequireOnlyKeys(webhook, "service.webhook", "url");
-        var url = RequiredScalar(webhook, "url", "service.webhook");
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("http" or "https"))
-            throw new ManifestLoadException("service.webhook.url must be an absolute http or https URL.");
-        return parsed;
     }
 
     private static TtlPolicy ReadMaxTtl(YamlMappingNode service)

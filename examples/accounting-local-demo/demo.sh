@@ -14,7 +14,7 @@ readonly SENTINEL_CONNECTION="$EXAMPLE_DIR/secrets/sentinel-connection.txt"
 
 host_pid=""
 inspector_pid=""
-webhook_pid=""
+capture_pid=""
 
 choose_port() {
 	python3 - <<'PY'
@@ -44,7 +44,7 @@ cleanup() {
 	local status=$?
 	stop_process "$host_pid"
 	stop_process "$inspector_pid"
-	stop_process "$webhook_pid"
+	stop_process "$capture_pid"
 	"$BOOTSTRAP" stop >/dev/null 2>&1 || true
 	exit "$status"
 }
@@ -74,12 +74,12 @@ fi
 trap cleanup EXIT INT TERM
 printf 'Preparing local PostgreSQL.\n'
 "$BOOTSTRAP" start >/dev/null
-printf 'Starting the local webhook receiver, Sentinel, and A2A Inspector.\n'
-webhook_log="$EXAMPLE_DIR/secrets/webhook-events.jsonl"
-rm -f "$webhook_log"
-python3 "$EXAMPLE_DIR/capture_receiver.py" --bind 127.0.0.1 --port 8082 --output "$webhook_log" \
-	>"$EXAMPLE_DIR/secrets/webhook.log" 2>&1 &
-webhook_pid=$!
+printf 'Starting the local capture receiver, Sentinel, and A2A Inspector.\n'
+capture_log="$EXAMPLE_DIR/secrets/capture-events.jsonl"
+rm -f "$capture_log"
+python3 "$EXAMPLE_DIR/capture_receiver.py" --bind 127.0.0.1 --port 8082 --output "$capture_log" \
+	>"$EXAMPLE_DIR/secrets/capture.log" 2>&1 &
+capture_pid=$!
 rm -f "$SENTINEL_CONNECTION"
 host_url="http://127.0.0.1:$(choose_port)"
 (
@@ -95,7 +95,7 @@ host_pid=$!
 inspector_pid=$!
 
 until python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8082), 1).close()' >/dev/null 2>&1; do
-	kill -0 "$webhook_pid" >/dev/null 2>&1 || { cat "$EXAMPLE_DIR/secrets/webhook.log" >&2; exit 1; }
+	kill -0 "$capture_pid" >/dev/null 2>&1 || { cat "$EXAMPLE_DIR/secrets/capture.log" >&2; exit 1; }
 	sleep 1
 done
 
@@ -124,7 +124,8 @@ Connect A2A Inspector to:
   Inspector UI: http://127.0.0.1:8081/
   Agent Card URL: $host_url/.well-known/agent-card.json
   Agent endpoint: $host_url/a2a/
-  Webhook capture: $webhook_log
+  Local capture: http://127.0.0.1:8082/
+  Capture log: $capture_log
 
 In A2A Inspector, click Send streaming and ask:
   Tell me when an invoice is paid. Keep the watch for 7 days.
@@ -156,8 +157,14 @@ docker exec $CONTAINER_NAME psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \\
   -c "UPDATE invoices SET paid = true WHERE invoice_id = 'invoice-demo-001'"
 
 That SQL update marks the invoice paid and adds it to the result set.
-The same diff JSON is also posted to http://127.0.0.1:8082/ and appended to:
-  $webhook_log
+The capture at http://127.0.0.1:8082/ receives nothing until the consuming agent
+registers it for this task:
+
+curl -s -X POST "$host_url/a2a/" -H 'content-type: application/json' \\
+  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/pushNotificationConfig/set","params":{"taskId":"<task id>","url":"http://127.0.0.1:8082/"}}'
+
+Accepted posts are appended to:
+  $capture_log
 
 EOF
 wait "$host_pid"
