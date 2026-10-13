@@ -43,7 +43,7 @@ static async Task RunAsync(string phase, string directory, int port)
             var created = await subscriptions.InvokeAsync(
                 principal,
                 new("watch-task", "arm"),
-                new SubscribeToQuery(new("paid-items"), new("paid")),
+                new SubscribeToQuery(new("paid-items"), new("paid"), new Unbounded()),
                 stopping.Token);
             if (created.Subscription is null || created.Subscription.State != SubscriptionState.Active)
                 throw new InvalidOperationException($"Watch did not arm: {created.Kind} {created.Message}");

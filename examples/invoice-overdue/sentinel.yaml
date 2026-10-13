@@ -60,7 +60,7 @@ queries:
   - id: overdue-invoices
     description: Finds open invoices whose due date has passed.
     examples:
-      - Tell me when an invoice is overdue.
+      - Tell me when an invoice is overdue. Keep the watch for 7 days.
     cypher: >-
       MATCH (invoice:Invoice)
       WHERE invoice.status = 'open' AND invoice.due_date < datetime()

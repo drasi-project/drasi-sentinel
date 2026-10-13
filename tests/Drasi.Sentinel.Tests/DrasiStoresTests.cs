@@ -110,6 +110,40 @@ public sealed class DrasiStoresTests
             var events = await reopened.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None);
             Assert.Equal("one", Assert.Single(events).Content);
             Assert.Equal(Path.Combine(directory, "data", SqliteSentinelRepository.FileName), path);
+            Assert.Equal("[]", (await File.ReadAllTextAsync(Path.Combine(directory, "data", SqliteSentinelRepository.AuthoredQueriesFileName))).Trim());
+        }
+        finally
+        {
+            TryDelete(directory);
+        }
+    }
+
+    [Fact]
+    public async Task Authored_queries_are_written_beside_the_journal()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var repository = SqliteSentinelRepository.Create(Path.Combine(directory, SqliteSentinelRepository.FileName));
+        try
+        {
+            await repository.InitializeAsync(CancellationToken.None);
+            await repository.SaveAsync(new AuthoredQuery(
+                new("ready-orders"),
+                "Ready pickup orders.",
+                "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id",
+                ["ledger"],
+                [new QueryJoinSpec("PLATE", [new QueryJoinKeySpec("orders", "plate"), new QueryJoinKeySpec("vehicles", "plate")])],
+                new Unbounded()),
+                CancellationToken.None);
+
+            var path = Path.Combine(directory, SqliteSentinelRepository.AuthoredQueriesFileName);
+            var written = await File.ReadAllTextAsync(path);
+            Assert.Contains("\"id\": \"ready-orders\"", written, StringComparison.Ordinal);
+            Assert.Contains("MATCH (n:orders)", written, StringComparison.Ordinal);
+            Assert.Contains("\"id\": \"PLATE\"", written, StringComparison.Ordinal);
+
+            await repository.DeleteAsync(new("ready-orders"), CancellationToken.None);
+            Assert.DoesNotContain("ready-orders", await File.ReadAllTextAsync(path), StringComparison.Ordinal);
         }
         finally
         {
@@ -124,6 +158,84 @@ public sealed class DrasiStoresTests
         var error = Assert.Throws<SentinelException>(() =>
             DrasiStores.ValidatePlacement(directory, directory, null));
         Assert.Equal("store_path_invalid", error.Code);
+    }
+
+    [Fact]
+    public async Task Open_removes_a_probe_index_left_by_a_previous_process()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var indexes = Path.Combine(directory, DrasiStores.DirectoryName, DrasiStores.IndexDirectoryName);
+        var probeId = DrasiStores.ProbeQueryPrefix + Guid.NewGuid().ToString("N");
+        var committed = Path.Combine(indexes, "query-pickup-order-ready");
+        Directory.CreateDirectory(Path.Combine(indexes, probeId));
+        Directory.CreateDirectory(committed);
+        File.WriteAllText(Path.Combine(indexes, probeId, "CURRENT"), "probe");
+        File.WriteAllText(Path.Combine(committed, "CURRENT"), "keep");
+        Engine? engine = null;
+        try
+        {
+            engine = await DrasiStores.OpenAsync(directory, null, null, "sweep", StartOnly, CancellationToken.None);
+            Assert.False(Directory.Exists(Path.Combine(indexes, probeId)));
+            Assert.Equal("keep", await File.ReadAllTextAsync(Path.Combine(committed, "CURRENT")));
+        }
+        finally
+        {
+            if (engine is not null)
+                await DrasiStores.ReleaseAsync(engine);
+            TryDelete(directory);
+        }
+    }
+
+    [Fact]
+    public void Leftover_probe_sweep_keeps_a_committed_query_index()
+    {
+        var indexes = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var probeId = DrasiStores.ProbeQueryPrefix + Guid.NewGuid().ToString("N");
+        var committed = Path.Combine(indexes, "query-pickup-order-ready");
+        var almost = Path.Combine(indexes, DrasiStores.ProbeQueryPrefix + "not-a-guid");
+        Directory.CreateDirectory(Path.Combine(indexes, probeId));
+        Directory.CreateDirectory(committed);
+        Directory.CreateDirectory(almost);
+        File.WriteAllText(Path.Combine(indexes, probeId, "CURRENT"), "probe");
+        File.WriteAllText(Path.Combine(committed, "CURRENT"), "keep");
+        try
+        {
+            DrasiStores.DeleteLeftoverProbeIndexes(indexes);
+            Assert.False(Directory.Exists(Path.Combine(indexes, probeId)));
+            Assert.Equal("keep", File.ReadAllText(Path.Combine(committed, "CURRENT")));
+            Assert.True(Directory.Exists(almost));
+        }
+        finally
+        {
+            TryDelete(indexes);
+        }
+    }
+
+    [Fact]
+    public void Probe_index_cleanup_refuses_a_committed_query_and_a_symlink()
+    {
+        var indexes = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var committed = Path.Combine(indexes, "query-pickup-order-ready");
+        var probeId = DrasiStores.ProbeQueryPrefix + Guid.NewGuid().ToString("N");
+        Directory.CreateDirectory(committed);
+        File.WriteAllText(Path.Combine(committed, "CURRENT"), "keep");
+        Directory.CreateSymbolicLink(Path.Combine(indexes, probeId), committed);
+        var almost = Path.Combine(indexes, DrasiStores.ProbeQueryPrefix + "not-a-guid");
+        Directory.CreateDirectory(almost);
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => DrasiStores.DeleteProbeIndex(indexes, "query-pickup-order-ready"));
+            Assert.Throws<InvalidOperationException>(() => DrasiStores.DeleteProbeIndex(indexes, probeId));
+            Assert.Throws<InvalidOperationException>(() => DrasiStores.DeleteLeftoverProbeIndexes(indexes));
+
+            Assert.Equal("keep", File.ReadAllText(Path.Combine(committed, "CURRENT")));
+            Assert.True(Directory.Exists(almost));
+            Assert.True(Directory.Exists(Path.Combine(indexes, probeId)));
+        }
+        finally
+        {
+            TryDelete(indexes);
+        }
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Drasi.Sentinel.Domain;
 using Microsoft.Data.Sqlite;
 
@@ -16,6 +17,7 @@ public static class SentinelDataDirectory
 public sealed class SqliteSentinelRepository : IConversationRepository, IAuthoredQueryStore, IAsyncDisposable
 {
     public const string FileName = "journal.sqlite";
+    public const string AuthoredQueriesFileName = "authored-queries.json";
 
     private const string MigrationSql = """
         CREATE TABLE IF NOT EXISTS sentinel_conversation_tasks (
@@ -37,6 +39,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
             state TEXT NOT NULL,
             native_subscription_id TEXT NOT NULL UNIQUE,
             created_at TEXT NOT NULL,
+            expires_at TEXT NULL,
             UNIQUE (owner_id, task_id),
             UNIQUE (owner_id, task_id, request_key));
         CREATE TABLE IF NOT EXISTS sentinel_task_events (
@@ -54,7 +57,8 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
             cypher TEXT NOT NULL,
             source_ids TEXT NOT NULL,
             joins TEXT NOT NULL,
-            created_at TEXT NOT NULL);
+            created_at TEXT NOT NULL,
+            expires_at TEXT NULL);
         CREATE TABLE IF NOT EXISTS sentinel_diff_receipts (
             subscription_id TEXT NOT NULL,
             receipt TEXT NOT NULL,
@@ -76,6 +80,9 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         await using var command = connection.CreateCommand();
         command.CommandText = MigrationSql;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await EnsureColumnAsync(connection, "sentinel_subscriptions", "expires_at", cancellationToken);
+        await EnsureColumnAsync(connection, "sentinel_authored_queries", "expires_at", cancellationToken);
+        await PublishAuthoredQueriesAsync(cancellationToken);
     }
 
     public async Task<ConversationTask> GetOrCreateTaskAsync(Principal principal, ConversationTaskId taskId, CancellationToken cancellationToken)
@@ -115,8 +122,8 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         {
             insert.CommandText = """
                 INSERT INTO sentinel_subscriptions (
-                    subscription_id, owner_id, task_id, tenant_id, query_id, reaction_id, request_key, state, native_subscription_id, created_at)
-                VALUES (@id, @owner, @task, @tenant, @query, @reaction, @request, @state, @native, @created)
+                    subscription_id, owner_id, task_id, tenant_id, query_id, reaction_id, request_key, state, native_subscription_id, created_at, expires_at)
+                VALUES (@id, @owner, @task, @tenant, @query, @reaction, @request, @state, @native, @created, @expires)
                 ON CONFLICT (owner_id, task_id) DO NOTHING;
                 """;
             AddSubscription(insert, item);
@@ -287,7 +294,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT query_id, description, cypher, source_ids, joins FROM sentinel_authored_queries ORDER BY query_id";
+        command.CommandText = "SELECT query_id, description, cypher, source_ids, joins, expires_at FROM sentinel_authored_queries ORDER BY query_id";
         var result = new List<AuthoredQuery>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -299,7 +306,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
     {
         await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT query_id, description, cypher, source_ids, joins FROM sentinel_authored_queries WHERE query_id=@id";
+        command.CommandText = "SELECT query_id, description, cypher, source_ids, joins, expires_at FROM sentinel_authored_queries WHERE query_id=@id";
         Add(command, "@id", id.Value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadAuthored(reader) : null;
@@ -310,13 +317,14 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         await using var connection = await OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO sentinel_authored_queries (query_id, description, cypher, source_ids, joins, created_at)
-            VALUES (@id, @description, @cypher, @sources, @joins, @created)
+            INSERT INTO sentinel_authored_queries (query_id, description, cypher, source_ids, joins, created_at, expires_at)
+            VALUES (@id, @description, @cypher, @sources, @joins, @created, @expires)
             ON CONFLICT (query_id) DO NOTHING;
             """;
         AddAuthored(command, query);
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new SentinelException("query_exists", $"Query '{query.Id.Value}' already exists.");
+        await PublishAuthoredQueriesAsync(cancellationToken);
     }
 
     public async Task ReplaceAsync(AuthoredQuery query, CancellationToken cancellationToken)
@@ -331,6 +339,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         AddAuthored(command, query);
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
             throw new SentinelException("query_unknown", $"Query '{query.Id.Value}' does not exist.");
+        await PublishAuthoredQueriesAsync(cancellationToken);
     }
 
     public async Task DeleteAsync(QueryId id, CancellationToken cancellationToken)
@@ -340,9 +349,37 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         command.CommandText = "DELETE FROM sentinel_authored_queries WHERE query_id=@id";
         Add(command, "@id", id.Value);
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await PublishAuthoredQueriesAsync(cancellationToken);
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    private async Task PublishAuthoredQueriesAsync(CancellationToken cancellationToken)
+    {
+        var directory = Path.GetDirectoryName(_path);
+        if (string.IsNullOrEmpty(directory))
+            return;
+        var queries = await ListAsync(cancellationToken);
+        var json = JsonSerializer.Serialize(
+            queries.Select(query => new
+            {
+                id = query.Id.Value,
+                description = query.Description,
+                cypher = query.Cypher,
+                sources = query.SourceIds,
+                joins = query.Joins.Select(join => new
+                {
+                    id = join.Id,
+                    keys = join.Keys.Select(key => new { label = key.Label, property = key.Property }),
+                }),
+                expiresAt = query.Expires.Instant,
+            }),
+            new JsonSerializerOptions { WriteIndented = true });
+        var destination = Path.Combine(directory, AuthoredQueriesFileName);
+        var temporary = destination + ".tmp";
+        await File.WriteAllTextAsync(temporary, json + Environment.NewLine, cancellationToken);
+        File.Move(temporary, destination, overwrite: true);
+    }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {
@@ -404,7 +441,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
     }
 
     private const string SubscriptionSelect = """
-        SELECT subscription_id, task_id, tenant_id, owner_id, query_id, reaction_id, request_key, state, native_subscription_id, created_at
+        SELECT subscription_id, task_id, tenant_id, owner_id, query_id, reaction_id, request_key, state, native_subscription_id, created_at, expires_at
         FROM sentinel_subscriptions
         """;
 
@@ -445,7 +482,8 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         new(new(reader.GetString(4)), new(reader.GetString(5)), new(reader.GetString(6))),
         Enum.Parse<SubscriptionState>(reader.GetString(7)),
         new(reader.GetString(8)),
-        ParseTime(reader.GetString(9)));
+        ParseTime(reader.GetString(9)),
+        ReadLifetime(reader, 10));
 
     private static void AddSubscription(SqliteCommand command, ConversationSubscription subscription)
     {
@@ -459,6 +497,7 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         Add(command, "@state", subscription.State.ToString());
         Add(command, "@native", subscription.NativeSubscriptionId.Value);
         Add(command, "@created", Format(subscription.CreatedAt));
+        Add(command, "@expires", FormatLifetime(subscription.Expires));
     }
 
     private static AuthoredQuery ReadAuthored(SqliteDataReader reader)
@@ -471,7 +510,8 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
             System.Text.Json.JsonSerializer.Deserialize<string[]>(reader.GetString(3)) ?? [],
             joins.Select(join => new QueryJoinSpec(
                 join.Id,
-                join.Keys.Select(key => new QueryJoinKeySpec(key.Label, key.Property)).ToArray())).ToArray());
+                join.Keys.Select(key => new QueryJoinKeySpec(key.Label, key.Property)).ToArray())).ToArray(),
+            ReadLifetime(reader, 5));
     }
 
     private static void AddAuthored(SqliteCommand command, AuthoredQuery query)
@@ -482,10 +522,31 @@ public sealed class SqliteSentinelRepository : IConversationRepository, IAuthore
         Add(command, "@sources", System.Text.Json.JsonSerializer.Serialize(query.SourceIds));
         Add(command, "@joins", System.Text.Json.JsonSerializer.Serialize(query.Joins));
         Add(command, "@created", Format(DateTimeOffset.UtcNow));
+        Add(command, "@expires", FormatLifetime(query.Expires));
     }
 
     private static void Add(SqliteCommand command, string name, object value) =>
         command.Parameters.AddWithValue(name, value);
+
+    private static async Task EnsureColumnAsync(SqliteConnection connection, string table, string column, CancellationToken cancellationToken)
+    {
+        await using var info = connection.CreateCommand();
+        info.CommandText = $"PRAGMA table_info({table});";
+        await using var reader = await info.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (reader.GetString(1).Equals(column, StringComparison.Ordinal))
+                return;
+        }
+
+        await ExecuteAsync(connection, $"ALTER TABLE {table} ADD COLUMN {column} TEXT NULL;", cancellationToken);
+    }
+
+    private static Lifetime ReadLifetime(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal) ? new Unbounded() : new Until(ParseTime(reader.GetString(ordinal)));
+
+    private static object FormatLifetime(Lifetime lifetime) =>
+        lifetime.Instant is { } instant ? Format(instant) : DBNull.Value;
 
     private static string Format(DateTimeOffset value) =>
         value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);

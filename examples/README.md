@@ -20,7 +20,8 @@ provide query, source, Cypher, or filter identifiers.
   building comfort tutorial, and no queries. The agent builds the watches.
 
 Each running example writes its journal, Drasi index, state, and WAL files under
-`data/` next to that example's `sentinel.yaml`. Two examples do not
+`data/` next to that example's `sentinel.yaml`. Queries the agent commits are
+in `data/authored-queries.json`. Two examples do not
 share those files. Set `service.data` to move them.
 
 Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` before running a host.

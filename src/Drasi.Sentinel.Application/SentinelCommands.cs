@@ -8,7 +8,7 @@ using Drasi.Sentinel.Domain;
 namespace Drasi.Sentinel.Application;
 
 public abstract record GovernedToolCall;
-public sealed record SubscribeToQuery(QueryId Query, SubscriptionRequestKey RequestKey) : GovernedToolCall;
+public sealed record SubscribeToQuery(QueryId Query, SubscriptionRequestKey RequestKey, Lifetime Expires) : GovernedToolCall;
 public sealed record ListTaskSubscriptions : GovernedToolCall;
 public sealed record CancelTaskSubscription(SubscriptionId SubscriptionId) : GovernedToolCall;
 public sealed record GetCurrentTaskResults : GovernedToolCall;
@@ -117,6 +117,10 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
         await engine.StartAsync(cancellationToken);
         foreach (var source in topology.Sources)
             await engine.AddSourceAsync(source.Kind, source.Id, source.Configuration, autoStart: false, bootstrap: source.Bootstrap, cancellationToken: cancellationToken);
+        // drasi-source-mysql 0.2.10 ignores autoStart and starts during add.
+        // Stop it so feeds stay quiet until watches are restored.
+        foreach (var source in topology.Sources)
+            await StopIfRunningAsync(engine, source.Id, cancellationToken);
         foreach (var query in topology.Queries)
         {
             var nativeId = NativeQueryId(query.Id);
@@ -129,9 +133,30 @@ public sealed partial class DrasiNativeEngine(DrasiTopology topology, INativeRes
     {
         var engine = RequireEngine();
         foreach (var source in topology.Sources)
-            await engine.StartSourceAsync(source.Id, cancellationToken);
+            await StartIfNeededAsync(engine, source.Id, cancellationToken);
         foreach (var queryId in _feedQueryIds)
             await engine.WaitForQueryAsync(queryId, null, cancellationToken);
+    }
+
+    private static async Task StopIfRunningAsync(Engine engine, string id, CancellationToken cancellationToken)
+    {
+        var status = await engine.GetSourceStatusAsync(id, cancellationToken);
+        if (status is ComponentStatus.Running or ComponentStatus.Starting)
+            await engine.StopSourceAsync(id, cancellationToken);
+    }
+
+    private static async Task StartIfNeededAsync(Engine engine, string id, CancellationToken cancellationToken)
+    {
+        var status = await engine.GetSourceStatusAsync(id, cancellationToken);
+        if (status is ComponentStatus.Running or ComponentStatus.Starting)
+            return;
+        try
+        {
+            await engine.StartSourceAsync(id, cancellationToken);
+        }
+        catch (DrasiException exception) when (exception.Message.Contains("already running", StringComparison.OrdinalIgnoreCase))
+        {
+        }
     }
 
     public Task AttachAsync(ConversationSubscription subscription, CancellationToken cancellationToken) =>
@@ -206,7 +231,8 @@ public sealed class ConversationSubscriptions(
     INativeEngine engine,
     IConversationRepository repository,
     ITaskEventNotifier notifier,
-    TimeProvider timeProvider) : IConversationSubscriptions
+    TimeProvider timeProvider,
+    IAuthoredQueryStore? authored = null) : IConversationSubscriptions
 {
     private static readonly JsonSerializerOptions ArtifactJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -231,16 +257,16 @@ public sealed class ConversationSubscriptions(
     private Task<ToolResult> SubscribeQueryAsync(Principal principal, TaskTurnId turn, SubscribeToQuery subscribe, CancellationToken cancellationToken)
     {
         var bound = CatalogBinding.Require(catalog, subscribe.Query);
-        return SubscribeAsync(principal, turn, new(bound.Query, bound.Reaction, subscribe.RequestKey), cancellationToken);
+        return SubscribeAsync(principal, turn, new(bound.Query, bound.Reaction, subscribe.RequestKey), subscribe.Expires, cancellationToken);
     }
 
-    private async Task<ToolResult> SubscribeAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, CancellationToken cancellationToken)
+    private async Task<ToolResult> SubscribeAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, Lifetime expires, CancellationToken cancellationToken)
     {
         var gate = _activation.GetOrAdd($"{principal.Owner.Value}\n{turn.TaskId}", static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken);
         try
         {
-            return await SubscribeClaimedAsync(principal, turn, request, cancellationToken);
+            return await SubscribeClaimedAsync(principal, turn, request, expires, cancellationToken);
         }
         finally
         {
@@ -248,17 +274,20 @@ public sealed class ConversationSubscriptions(
         }
     }
 
-    private async Task<ToolResult> SubscribeClaimedAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, CancellationToken cancellationToken)
+    private async Task<ToolResult> SubscribeClaimedAsync(Principal principal, TaskTurnId turn, SubscriptionRequest request, Lifetime expires, CancellationToken cancellationToken)
     {
+        if (authored is not null && await authored.FindAsync(request.QueryId, cancellationToken) is { } query)
+            TtlToken.EnsureSubscriptionFits(query.Expires, expires);
         var taskId = new ConversationTaskId(turn.TaskId);
         await repository.GetOrCreateTaskAsync(principal, taskId, cancellationToken);
         var id = new SubscriptionId(Guid.NewGuid());
         var candidate = new ConversationSubscription(
             id, taskId, principal.Tenant, principal.Owner, request, SubscriptionState.Arming,
-            new NativeSubscriptionId($"reaction-{id.Value:N}"), timeProvider.GetUtcNow());
+            new NativeSubscriptionId($"reaction-{id.Value:N}"), timeProvider.GetUtcNow(), expires);
         var subscription = await repository.GetOrCreateSubscriptionAsync(candidate, cancellationToken);
         subscription = await repository.GetSubscriptionAsync(principal.Owner, taskId, subscription.Id, cancellationToken) ?? subscription;
-        if (subscription.State == SubscriptionState.Cancelled)
+        if (subscription.State is SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired
+            || subscription.Expires.IsDue(timeProvider.GetUtcNow()))
             return new("watch_ended", subscription, Message: "The watch on this task has ended.");
         if (subscription.State is not (SubscriptionState.Arming or SubscriptionState.Degraded))
         {
@@ -359,6 +388,9 @@ public sealed class ConversationSubscriptions(
         var taskId = new ConversationTaskId(turn.TaskId);
         var subscription = (await repository.ListSubscriptionsAsync(principal.Owner, taskId, cancellationToken)).SingleOrDefault()
             ?? throw new SentinelException("subscription_not_found", "The task does not have a subscription.");
+        if (subscription.State is SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired
+            || subscription.Expires.IsDue(timeProvider.GetUtcNow()))
+            return new("watch_ended", subscription, Message: "The watch on this task has ended.");
         var rows = await engine.GetQueryResultsAsync(subscription.Request.QueryId, cancellationToken);
         catalog.Queries.TryGetValue(subscription.Request.QueryId, out var query);
         var artifact = new CurrentTaskResultsArtifact(

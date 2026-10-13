@@ -104,7 +104,7 @@ public static class AgentCard
     };
 
     private const string ConsumerContract =
-        "One change watch is one durable A2A task and one curated subscription. A second watch needs a new task. Sending another watch on the same task is rejected.\n\n" +
+        "One change watch is one durable A2A task and one curated subscription. A second watch needs a new task. Sending another watch on the same task is rejected. The assistant asks how long to keep the watch when the message does not say. The answer is another message on the same task.\n\n" +
         "Read this description once, then pick a skill. A skill tagged continuous-query is one watch. Its description says what is watched. Its examples are the utterances that select it. Send one example as the whole user text. Do not send the skill id, a reaction id, Cypher, a source name, a filter, a confirmation code, a destination, or a webhook. The host binds one curated reaction. You do not choose it.\n\n" +
         "The skill current-task-results is not a watch. Send its example only on the task a watch already opened. It returns the current rows for that task's query.\n\n" +
         "POST JSON-RPC 2.0 to the url of the supportedInterfaces entry whose protocolBinding is JSONRPC. Use Content-Type application/json and Accept text/event-stream. capabilities.streaming is true and capabilities.pushNotifications is false. Do not register a push URL. Use method message/stream to send a message. Use method tasks/subscribe to reconnect. Do not use message/send.\n\n" +

@@ -13,9 +13,9 @@ public sealed class WatchRestoreTests
         var engine = new RecordingEngine();
         var service = Service(repository, engine);
         var principal = new Principal(new("tenant"), new("owner"));
-        var active = await service.InvokeAsync(principal, new("live", "m1"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+        var active = await service.InvokeAsync(principal, new("live", "m1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
         var degraded = await Arm(repository, principal, "stuck", SubscriptionState.Degraded);
-        var ended = await service.InvokeAsync(principal, new("done", "m1"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+        var ended = await service.InvokeAsync(principal, new("done", "m1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
         await service.InvokeAsync(principal, new("done", "m2"), new CancelTaskSubscription(ended.Subscription!.Id), CancellationToken.None);
         engine.Attached.Clear();
 
@@ -39,8 +39,8 @@ public sealed class WatchRestoreTests
         var engine = new RecordingEngine { FailTask = "bad" };
         var service = Service(repository, engine);
         var principal = new Principal(new("tenant"), new("owner"));
-        await service.InvokeAsync(principal, new("good", "m1"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
-        await service.InvokeAsync(principal, new("bad", "m1"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+        await service.InvokeAsync(principal, new("good", "m1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
+        await service.InvokeAsync(principal, new("bad", "m1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
         engine.FailRestores = true;
 
         await service.RestoreWatchesAsync(CancellationToken.None);
@@ -65,7 +65,7 @@ public sealed class WatchRestoreTests
         var principal = new Principal(new("tenant"), new("owner"));
         var degraded = await Arm(repository, principal, "stuck", SubscriptionState.Degraded);
 
-        var retried = await service.InvokeAsync(principal, new("stuck", "m2"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+        var retried = await service.InvokeAsync(principal, new("stuck", "m2"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
 
         var attached = Assert.Single(engine.Attached);
         Assert.Equal(degraded.NativeSubscriptionId, attached.NativeSubscriptionId);
@@ -96,7 +96,7 @@ public sealed class WatchRestoreTests
         var engine = new RecordingEngine { DetachMissing = true };
         var service = Service(repository, engine);
         var principal = new Principal(new("tenant"), new("owner"));
-        var created = await service.InvokeAsync(principal, new("task", "m1"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+        var created = await service.InvokeAsync(principal, new("task", "m1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
 
         var cancelled = await service.InvokeAsync(principal, new("task", "m2"), new CancelTaskSubscription(created.Subscription!.Id), CancellationToken.None);
 
@@ -120,7 +120,8 @@ public sealed class WatchRestoreTests
             new(new("query"), new("notify"), new("one")),
             SubscriptionState.Active,
             new("reaction-1"),
-            DateTimeOffset.UnixEpoch);
+            DateTimeOffset.UnixEpoch,
+            new Unbounded());
         await repository.GetOrCreateSubscriptionAsync(subscription, CancellationToken.None);
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
 
@@ -150,7 +151,8 @@ public sealed class WatchRestoreTests
             new(new("query"), new("notify"), new("one")),
             state,
             new($"reaction-{id:N}"),
-            DateTimeOffset.UnixEpoch);
+            DateTimeOffset.UnixEpoch,
+            new Unbounded());
         return await repository.GetOrCreateSubscriptionAsync(subscription, CancellationToken.None);
     }
 

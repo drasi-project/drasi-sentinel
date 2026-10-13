@@ -55,7 +55,7 @@ queries:
   - id: invoice-paid
     description: Reports invoices that are paid.
     examples:
-      - Tell me when an invoice is paid.
+      - Tell me when an invoice is paid. Keep the watch for 7 days.
     cypher: >-
       MATCH (invoice:invoices)
       WHERE invoice.paid = true

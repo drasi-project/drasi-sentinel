@@ -75,25 +75,47 @@ public sealed partial class DrasiNativeEngine : INativeQueryRuntime
             missing);
     }
 
-    public async Task<QueryProbe> ProbeAsync(
+    public Task<QueryProbe> ProbeAsync(
+        string cypher,
+        IReadOnlyList<string> sourceIds,
+        IReadOnlyList<QueryJoinSpec> joins,
+        TimeSpan readyTimeout,
+        CancellationToken cancellationToken) =>
+        RunProbeAsync(
+            RequireEngine(),
+            DrasiStores.IndexDirectory(topology.PluginDirectory, topology.DataDirectory),
+            cypher,
+            sourceIds,
+            joins,
+            readyTimeout,
+            cancellationToken);
+
+    internal static async Task<QueryProbe> RunProbeAsync(
+        Engine engine,
+        string indexDirectory,
         string cypher,
         IReadOnlyList<string> sourceIds,
         IReadOnlyList<QueryJoinSpec> joins,
         TimeSpan readyTimeout,
         CancellationToken cancellationToken)
     {
-        var engine = RequireEngine();
-        var id = $"query-probe-{Guid.NewGuid():N}";
+        var id = DrasiStores.ProbeQueryPrefix + Guid.NewGuid().ToString("N");
         try
         {
-            await engine.AddQueryAsync(id, cypher, sourceIds, Options(joins), cancellationToken);
-            await engine.WaitForQueryAsync(id, readyTimeout, cancellationToken);
-            var rows = await engine.GetQueryResultsAsync(id, cancellationToken);
-            return new QueryProbe(true, rows.Select(row => (JsonNode)row.DeepClone()).ToArray(), null);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            return new QueryProbe(false, [], string.IsNullOrWhiteSpace(exception.Message) ? "The query could not be tested." : exception.Message);
+            try
+            {
+                await engine.AddQueryAsync(id, cypher, sourceIds, Options(joins), cancellationToken);
+                await engine.WaitForQueryAsync(id, readyTimeout, cancellationToken);
+                var rows = await engine.GetQueryResultsAsync(id, cancellationToken);
+                return new QueryProbe(true, rows.Select(row => (JsonNode)row.DeepClone()).ToArray(), null);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return new QueryProbe(
+                    false,
+                    [],
+                    string.IsNullOrWhiteSpace(exception.Message) ? "The query could not be tested." : exception.Message);
+            }
         }
         finally
         {
@@ -105,7 +127,33 @@ public sealed partial class DrasiNativeEngine : INativeQueryRuntime
             {
                 // The probe query may never have been added.
             }
+
+            await DeleteReleasedProbeIndexAsync(indexDirectory, id);
         }
+    }
+
+    private static async Task DeleteReleasedProbeIndexAsync(string indexDirectory, string queryId)
+    {
+        const int attempts = 20;
+        Exception? last = null;
+        for (var attempt = 0; attempt < attempts; attempt++)
+        {
+            try
+            {
+                DrasiStores.DeleteProbeIndex(indexDirectory, queryId);
+                return;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                last = exception;
+                await Task.Delay(50);
+            }
+        }
+
+        throw new SentinelException(
+            "probe_index_retained",
+            $"The probe index '{queryId}' was not deleted.",
+            last!);
     }
 
     public async Task ProvisionAuthoredAsync(AuthoredQuery query, CancellationToken cancellationToken)

@@ -117,7 +117,8 @@ public sealed class QueryAuthoringEvalTests
             "Ready orders.",
             "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.status AS status",
             ["ledger"],
-            []), CancellationToken.None);
+            [],
+            new Unbounded()), CancellationToken.None);
         var runtime = new RecordingRuntime();
         runtime.Schemas["ledger"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[]}],"relations":[]}""");
         runtime.Schemas["physical"] = JsonNode.Parse("""{"nodes":[{"label":"vehicles","properties":[]}],"relations":[]}""");
@@ -140,6 +141,104 @@ public sealed class QueryAuthoringEvalTests
         Assert.Contains("vehicles", rejected, StringComparison.Ordinal);
         Assert.Contains("query_rejected", rejected, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_taken_query_id_keeps_the_first_definition()
+    {
+        var runtime = new RecordingRuntime();
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger"], StringComparer.Ordinal);
+        var authoring = new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify"));
+        var ready = "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id, n.status AS status";
+        var preparing = "MATCH (n:orders) WHERE n.status = 'preparing' RETURN n.id AS id, n.status AS status";
+        var first = JsonDocument.Parse(await authoring.AttemptJsonAsync(Commit("pickup-order-ready", ready, "Ready pickup orders."), CancellationToken.None));
+        Assert.Equal("pickup-order-ready", first.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+
+        var same = JsonDocument.Parse(await authoring.AttemptJsonAsync(Commit("pickup-order-ready", ready, "Ready pickup orders."), CancellationToken.None));
+        Assert.Equal("pickup-order-ready", same.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+
+        var second = JsonDocument.Parse(await authoring.AttemptJsonAsync(Commit("pickup-order-ready", preparing, "Orders still being prepared."), CancellationToken.None));
+        Assert.Equal("pickup-order-ready-2", second.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+        Assert.Equal(ready, (await store.FindAsync(new QueryId("pickup-order-ready"), CancellationToken.None))!.Cypher);
+        Assert.Equal(preparing, (await store.FindAsync(new QueryId("pickup-order-ready-2"), CancellationToken.None))!.Cypher);
+
+        var watched = new QueryAuthoring(
+            runtime,
+            store,
+            catalog,
+            sources,
+            new ReactionId("notify"),
+            (_, _) => Task.FromResult(true));
+        var error = await Assert.ThrowsAsync<SentinelException>(() => watched.UpdateJsonAsync(new Dictionary<string, string?>
+        {
+            ["id"] = "pickup-order-ready",
+            ["query"] = preparing,
+            ["sources"] = "ledger",
+        }, CancellationToken.None));
+        Assert.Equal("query_rejected", error.Code);
+        Assert.Equal(ready, (await store.FindAsync(new QueryId("pickup-order-ready"), CancellationToken.None))!.Cypher);
+    }
+
+    [Fact]
+    public async Task Subscribe_rejects_a_different_prompt_and_a_different_committed_id()
+    {
+        var runtime = new RecordingRuntime();
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var sources = new HashSet<string>(["ledger"], StringComparer.Ordinal);
+        runtime.Schemas["ledger"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"status"}]}],"relations":[]}""");
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        var session = AgentToolSession.Create(
+            Unused(),
+            Principal(),
+            new("task", "message"),
+            CancellationToken.None,
+            workbench,
+            "Tell me when a pickup order is still being prepared.");
+        await store.SaveAsync(new AuthoredQuery(
+            new QueryId("pickup-order-ready"),
+            "Ready pickup orders.",
+            "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id, n.status AS status",
+            ["ledger"],
+            [],
+            new Unbounded()), CancellationToken.None);
+        catalog.Add(QueryAuthoring.ToCatalogItem(
+            (await store.FindAsync(new QueryId("pickup-order-ready"), CancellationToken.None))!,
+            new ReactionId("notify")));
+
+        var reused = await session.InvokeAsync(AgentTurn.SubscribeTool, new Dictionary<string, string?> { ["query"] = "pickup-order-ready" });
+        Assert.Contains("does not match", reused, StringComparison.Ordinal);
+        Assert.Contains("query_rejected", reused, StringComparison.Ordinal);
+
+        var committed = JsonDocument.Parse(await session.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
+        {
+            ["id"] = "pickup-order-ready",
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'preparing' RETURN n.id AS id, n.status AS status",
+            ["sources"] = "ledger",
+            ["description"] = "Orders still being prepared.",
+        }));
+        Assert.Equal("pickup-order-ready-2", committed.RootElement.GetProperty("Committed").GetProperty("Id").GetString());
+        var wrong = await session.InvokeAsync(AgentTurn.SubscribeTool, new Dictionary<string, string?> { ["query"] = "pickup-order-ready" });
+        Assert.Contains("pickup-order-ready-2", wrong, StringComparison.Ordinal);
+        Assert.Contains("committed_id", wrong, StringComparison.Ordinal);
+        Assert.Equal(
+            "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id, n.status AS status",
+            (await store.FindAsync(new QueryId("pickup-order-ready"), CancellationToken.None))!.Cypher);
+    }
+
+    private static Dictionary<string, string?> Commit(string id, string query, string description) => new()
+    {
+        ["query"] = query,
+        ["sources"] = "ledger",
+        ["commit_as"] = id,
+        ["description"] = description,
+    };
 
     [Fact]
     public async Task Commit_rejects_a_phrase_when_the_stored_value_is_in_the_sample()

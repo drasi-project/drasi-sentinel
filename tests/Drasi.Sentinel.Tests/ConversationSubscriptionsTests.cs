@@ -17,15 +17,15 @@ public sealed class ConversationSubscriptionsTests
         var principal = Principal();
 
         var first = await service.InvokeAsync(principal, new("task-1", "message-1"),
-            new SubscribeToQuery(new("query"), new("first")), CancellationToken.None);
+            new SubscribeToQuery(new("query"), new("first"), new Unbounded()), CancellationToken.None);
         Assert.Equal(SubscriptionState.Active, first.Subscription!.State);
         var repeat = await service.InvokeAsync(principal, new("task-1", "message-2"),
-            new SubscribeToQuery(new("query"), new("first")), CancellationToken.None);
+            new SubscribeToQuery(new("query"), new("first"), new Unbounded()), CancellationToken.None);
         Assert.Equal(first.Subscription.Id, repeat.Subscription!.Id);
         await Assert.ThrowsAsync<SentinelException>(() => service.InvokeAsync(
             principal,
             new("task-1", "message-3"),
-            new SubscribeToQuery(new("query"), new("second")),
+            new SubscribeToQuery(new("query"), new("second"), new Unbounded()),
             CancellationToken.None));
 
         var ingestion = new NativeResultIngestion(repository, notifier, TimeProvider.System);
@@ -48,7 +48,7 @@ public sealed class ConversationSubscriptionsTests
         await engine.StartAsync(CancellationToken.None);
         var service = new ConversationSubscriptions(Catalog(), engine, repository, notifier, TimeProvider.System);
         var principal = Principal();
-        var created = await service.InvokeAsync(principal, new("task-1", "message-1"), new SubscribeToQuery(new("query"), new("one")), CancellationToken.None);
+        var created = await service.InvokeAsync(principal, new("task-1", "message-1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
         var cancelled = await service.InvokeAsync(principal, new("task-1", "message-2"), new CancelTaskSubscription(created.Subscription!.Id), CancellationToken.None);
         Assert.Equal(SubscriptionState.Cancelled, cancelled.Subscription!.State);
         await Assert.ThrowsAsync<SentinelException>(() => service.InvokeAsync(principal, new("other-task", "message-3"), new CancelTaskSubscription(created.Subscription.Id), CancellationToken.None));
@@ -65,7 +65,7 @@ public sealed class ConversationSubscriptionsTests
         var service = new ConversationSubscriptions(Catalog(), engine, repository, notifier, TimeProvider.System);
         var principal = Principal();
         var created = await service.InvokeAsync(principal, new("task-1", "message-1"),
-            new SubscribeToQuery(new("query"), new("first")), CancellationToken.None);
+            new SubscribeToQuery(new("query"), new("first"), new Unbounded()), CancellationToken.None);
 
         var result = await service.InvokeAsync(principal, new("task-1", "message-2"),
             new GetCurrentTaskResults(), CancellationToken.None);
@@ -93,7 +93,7 @@ public sealed class ConversationSubscriptionsTests
         var service = new ConversationSubscriptions(Catalog(), engine, repository, notifier, TimeProvider.System);
         var owner = Principal();
         await service.InvokeAsync(owner, new("task-1", "message-1"),
-            new SubscribeToQuery(new("query"), new("first")), CancellationToken.None);
+            new SubscribeToQuery(new("query"), new("first"), new Unbounded()), CancellationToken.None);
         var otherOwner = new Principal(new("tenant"), new("other-owner"));
 
         var exception = await Assert.ThrowsAsync<SentinelException>(() => service.InvokeAsync(

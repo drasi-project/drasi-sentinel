@@ -130,6 +130,6 @@ public sealed class ConversationRepositoryTests
     private static ConversationSubscription Subscription(string owner, string task, string key)
     {
         var id = new SubscriptionId(Guid.NewGuid());
-        return new(id, new(task), new("tenant"), new(owner), new(new("query"), new("reaction"), new(key)), SubscriptionState.Active, new($"native-{id.Value:N}"), DateTimeOffset.UtcNow);
+        return new(id, new(task), new("tenant"), new(owner), new(new("query"), new("reaction"), new(key)), SubscriptionState.Active, new($"native-{id.Value:N}"), DateTimeOffset.UtcNow, new Unbounded());
     }
 }

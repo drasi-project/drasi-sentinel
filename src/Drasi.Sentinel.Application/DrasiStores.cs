@@ -11,6 +11,8 @@ namespace Drasi.Sentinel.Application;
 internal static class DrasiStores
 {
     internal const string DirectoryName = "data";
+    internal const string IndexDirectoryName = "indexes";
+    internal const string ProbeQueryPrefix = "query-probe-";
 
     public static async Task<Engine> OpenAsync(
         string manifestDirectory,
@@ -27,10 +29,11 @@ internal static class DrasiStores
         var pluginRoot = Path.GetFullPath(manifestDirectory);
         var dataRoot = ResolveRoot(pluginRoot, configuredDataDirectory);
         ValidatePlacement(pluginRoot, dataRoot, secretFilePath);
-        var indexDirectory = Path.Combine(dataRoot, "indexes");
+        var indexDirectory = Path.Combine(dataRoot, IndexDirectoryName);
         var walDirectory = Path.Combine(dataRoot, "wal");
         Directory.CreateDirectory(indexDirectory);
         Directory.CreateDirectory(walDirectory);
+        DeleteLeftoverProbeIndexes(indexDirectory);
 
         var engine = await Engine.CreateAsync(
             engineId,
@@ -106,6 +109,88 @@ internal static class DrasiStores
 
         if (shutdownError is not null)
             throw shutdownError;
+    }
+
+    internal static string IndexDirectory(string manifestDirectory, string? configuredDataDirectory) =>
+        Path.Combine(ResolveRoot(manifestDirectory, configuredDataDirectory), IndexDirectoryName);
+
+    /// <summary>
+    /// Probe ids are <c>query-probe-</c> plus 32 lowercase hex digits. Committed
+    /// queries use <c>query-{catalog id}</c> and are not deleted here.
+    /// </summary>
+    internal static bool IsProbeQueryId(string queryId)
+    {
+        if (queryId.Length != ProbeQueryPrefix.Length + 32
+            || !queryId.StartsWith(ProbeQueryPrefix, StringComparison.Ordinal))
+            return false;
+
+        for (var index = ProbeQueryPrefix.Length; index < queryId.Length; index++)
+        {
+            var character = queryId[index];
+            if (character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
+                return false;
+        }
+
+        return true;
+    }
+
+    internal static void DeleteProbeIndex(string indexDirectory, string queryId)
+    {
+        if (!IsProbeQueryId(queryId))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to delete index '{queryId}' because it is not a probe.");
+        }
+
+        var root = Path.GetFullPath(indexDirectory);
+        var target = Path.Combine(root, queryId);
+        if (!Directory.Exists(target))
+            return;
+
+        var info = new DirectoryInfo(target);
+        if (info.LinkTarget is not null || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException(
+                $"Refusing to delete probe index symlink '{queryId}'.");
+        }
+
+        var full = Path.GetFullPath(target);
+        var prefix = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        if (!full.StartsWith(prefix, PathComparison)
+            || !string.Equals(Path.GetFileName(full), queryId, PathComparison))
+        {
+            throw new InvalidOperationException(
+                $"Probe index '{queryId}' is outside the index directory.");
+        }
+
+        Directory.Delete(full, recursive: true);
+    }
+
+    internal static void DeleteLeftoverProbeIndexes(string indexDirectory)
+    {
+        if (!Directory.Exists(indexDirectory))
+            return;
+
+        foreach (var directory in Directory.EnumerateDirectories(indexDirectory))
+        {
+            var name = Path.GetFileName(directory);
+            if (!IsProbeQueryId(name))
+                continue;
+
+            try
+            {
+                DeleteProbeIndex(indexDirectory, name);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                throw new SentinelException(
+                    "probe_index_retained",
+                    $"The probe index '{name}' was not deleted.",
+                    exception);
+            }
+        }
     }
 
     internal static string ResolveRoot(string manifestDirectory, string? configuredDataDirectory)

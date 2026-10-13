@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -16,7 +17,8 @@ public sealed record AuthoredQuery(
     string Description,
     string Cypher,
     IReadOnlyList<string> SourceIds,
-    IReadOnlyList<QueryJoinSpec> Joins);
+    IReadOnlyList<QueryJoinSpec> Joins,
+    Lifetime Expires);
 
 public sealed record QueryProbe(bool Ok, IReadOnlyList<JsonNode> Rows, string? Error);
 
@@ -64,7 +66,10 @@ public sealed record CapturedDiff(string Type, JsonNode? Data, JsonNode? Before,
 public interface IQueryAuthoring
 {
     Task<string> DescribeJsonAsync(CancellationToken cancellationToken);
-    Task<string> AttemptJsonAsync(IReadOnlyDictionary<string, string?> arguments, CancellationToken cancellationToken);
+    Task<string> AttemptJsonAsync(
+        IReadOnlyDictionary<string, string?> arguments,
+        CancellationToken cancellationToken,
+        DateTimeOffset? grantedAt = null);
     Task<string> UpdateJsonAsync(IReadOnlyDictionary<string, string?> arguments, CancellationToken cancellationToken);
 }
 
@@ -129,7 +134,10 @@ public sealed class QueryAuthoring(
     IAuthoredQueryStore store,
     LiveCatalog catalog,
     IReadOnlySet<string> sourceIds,
-    ReactionId reaction) : IQueryAuthoring
+    ReactionId reaction,
+    Func<QueryId, CancellationToken, Task<bool>>? queryIsWatched = null,
+    TtlPolicy? ttlPolicy = null,
+    TimeProvider? time = null) : IQueryAuthoring
 {
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -175,7 +183,8 @@ public sealed class QueryAuthoring(
 
     public async Task<string> AttemptJsonAsync(
         IReadOnlyDictionary<string, string?> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DateTimeOffset? grantedAt = null)
     {
         var sources = ParseSources(Required(arguments, "sources"));
         var joins = ParseJoins(Optional(arguments, "joins"));
@@ -226,10 +235,10 @@ public sealed class QueryAuthoring(
         string? committed = null;
         if (commitAs is not null)
         {
-            skipped = await TryCommitAsync(
-                commitAs, description, query, sources, joins, analysis, probe, callerText, literalSkip, projectionSkip, cancellationToken);
-            if (skipped is null)
-                committed = commitAs;
+            var commit = await TryCommitAsync(
+                commitAs, description, query, sources, joins, analysis, probe, callerText, literalSkip, projectionSkip, Optional(arguments, "ttl"), grantedAt, cancellationToken);
+            skipped = commit.Skipped;
+            committed = commit.Committed;
         }
         else if (joinSkip is not null)
         {
@@ -286,6 +295,12 @@ public sealed class QueryAuthoring(
         var id = new QueryId(Required(arguments, "id").Trim());
         var existing = await store.FindAsync(id, cancellationToken)
             ?? throw new SentinelException("query_unknown", $"Query '{id.Value}' is not an authored query.");
+        if (queryIsWatched is not null && await queryIsWatched(id, cancellationToken))
+        {
+            throw new SentinelException(
+                "query_rejected",
+                $"Query '{id.Value}' is already watched. Do not replace it. Call add_query and subscribe only to the id in Committed.");
+        }
         var sources = ParseSources(Required(arguments, "sources"));
         var joins = ParseJoins(Optional(arguments, "joins"));
         var query = Required(arguments, "query").Trim();
@@ -361,13 +376,13 @@ public sealed class QueryAuthoring(
             }, Json);
         }
 
-        var updated = new AuthoredQuery(id, description, query, sources, joins);
+        var updated = new AuthoredQuery(id, description, query, sources, joins, existing.Expires);
         await runtime.UpdateAsync(updated, CommitTimeout, cancellationToken);
         await store.ReplaceAsync(updated, cancellationToken);
         return JsonSerializer.Serialize(new { Kind = "query_updated", Id = id.Value, Query = query }, Json);
     }
 
-    private async Task<string?> TryCommitAsync(
+    private async Task<(string? Skipped, string? Committed)> TryCommitAsync(
         string commitAs,
         string? description,
         string query,
@@ -378,47 +393,50 @@ public sealed class QueryAuthoring(
         string? callerText,
         string? literalSkip,
         string? projectionSkip,
+        string? ttl,
+        DateTimeOffset? grantedAt,
         CancellationToken cancellationToken)
     {
         if (!QueryIdPattern.IsMatch(commitAs) || commitAs.StartsWith("probe", StringComparison.Ordinal))
             throw new SentinelException("query_rejected", "commit_as must be a lowercase id of letters, digits, and hyphens, and must not start with probe.");
         if (analysis.Blocking.Count > 0)
-            return string.Join(" | ", analysis.Blocking);
+            return (string.Join(" | ", analysis.Blocking), null);
         if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
-            return joinSkip;
+            return (joinSkip, null);
         if (analysis.UnknownLabels.Count > 0)
-            return $"Unknown label: {string.Join(", ", analysis.UnknownLabels)}.";
+            return ($"Unknown label: {string.Join(", ", analysis.UnknownLabels)}.", null);
         if (analysis.UnknownProperties.Count > 0)
-            return $"Unknown property: {string.Join(", ", analysis.UnknownProperties)}. Use a property name from the schema.";
+            return ($"Unknown property: {string.Join(", ", analysis.UnknownProperties)}. Use a property name from the schema.", null);
         if (DurationSkip(query, callerText) is { } durationSkip)
-            return durationSkip;
+            return (durationSkip, null);
         if (literalSkip is not null)
-            return literalSkip;
+            return (literalSkip, null);
         if (AggregationOnly(query, callerText) is { } aggregation)
-            return aggregation;
+            return (aggregation, null);
         if (projectionSkip is not null)
-            return projectionSkip;
+            return (projectionSkip, null);
         if (probe is not { Ok: true })
-            return probe?.Error ?? "The query was not tested.";
+            return (probe?.Error ?? "The query was not tested.", null);
 
+        var admitted = ttlPolicy is null
+            ? new Unbounded()
+            : TtlToken.Admit(ttl, ttlPolicy, grantedAt ?? (time ?? TimeProvider.System).GetUtcNow());
         var id = new QueryId(commitAs);
-        var authored = new AuthoredQuery(id, description ?? "", query, sources, joins);
+        var authored = new AuthoredQuery(id, description ?? "", query, sources, joins, admitted);
         var existing = await store.FindAsync(id, cancellationToken);
-        if (existing is not null)
+        if (existing is not null && Same(existing, authored))
         {
-            if (!Same(existing, authored))
-                throw new SentinelException("query_exists", $"Query '{commitAs}' already exists.");
             await runtime.AddAsync(existing, CommitTimeout, cancellationToken);
             EnsureCatalog(existing);
-            return null;
+            return (null, existing.Id.Value);
         }
 
-        if (catalog.Catalog.Queries.ContainsKey(id))
-            throw new SentinelException("query_exists", $"Query '{commitAs}' already exists.");
         if (string.IsNullOrWhiteSpace(description) || description.Length > 200 || description.Contains('\n') || description.Contains('\r'))
             throw new SentinelException("query_rejected", "Pass a one-line description of at most 200 characters when committing.");
+        if (existing is not null || catalog.Catalog.Queries.ContainsKey(id))
+            id = new QueryId(await AllocateIdAsync(commitAs, cancellationToken));
 
-        authored = authored with { Description = description };
+        authored = new AuthoredQuery(id, description, query, sources, joins, admitted);
         await store.SaveAsync(authored, cancellationToken);
         try
         {
@@ -431,7 +449,28 @@ public sealed class QueryAuthoring(
             throw;
         }
 
-        return null;
+        return (null, id.Value);
+    }
+
+    private async Task<string> AllocateIdAsync(string requested, CancellationToken cancellationToken)
+    {
+        var stem = requested.Length > 60 ? requested[..60].TrimEnd('-') : requested;
+        for (var suffix = 2; suffix < 100; suffix++)
+        {
+            var tail = "-" + suffix.ToString(CultureInfo.InvariantCulture);
+            var candidate = stem.Length + tail.Length <= 64
+                ? stem + tail
+                : stem[..(64 - tail.Length)].TrimEnd('-') + tail;
+            if (!QueryIdPattern.IsMatch(candidate))
+                continue;
+            var id = new QueryId(candidate);
+            if (await store.FindAsync(id, cancellationToken) is null && !catalog.Catalog.Queries.ContainsKey(id))
+                return candidate;
+        }
+
+        throw new SentinelException(
+            "query_exists",
+            $"Query '{requested}' already exists. Do not replace it, and do not subscribe to it.");
     }
 
     private void EnsureCatalog(AuthoredQuery query)

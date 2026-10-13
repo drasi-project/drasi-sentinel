@@ -36,7 +36,8 @@ public sealed class SentinelManifest
         bool queryAuthoringEnabled,
         IReadOnlyList<string> plugins,
         SecretStoreManifest? secretStore,
-        string? dataDirectory = null)
+        string? dataDirectory = null,
+        TtlPolicy? ttlPolicy = null)
     {
         Agent = agent;
         Profile = profile;
@@ -49,6 +50,7 @@ public sealed class SentinelManifest
         Plugins = plugins;
         SecretStore = secretStore;
         DataDirectory = dataDirectory;
+        TtlPolicy = ttlPolicy ?? TtlPolicy.Uncapped;
     }
 
     public AgentManifest? Agent { get; }
@@ -62,6 +64,7 @@ public sealed class SentinelManifest
     internal ExecutableCatalog ExecutableCatalog { get; }
     internal string Directory { get; }
     internal string? DataDirectory { get; }
+    public TtlPolicy TtlPolicy { get; }
 }
 
 public sealed class ManifestLoadException(string message, Exception? innerException = null)
@@ -112,6 +115,7 @@ public static class SentinelManifestLoader
         var profile = ReadProfile(service);
         var webhookUrl = ReadWebhook(service);
         var queryAuthoringEnabled = ReadQueryAuthoring(service);
+        var ttlPolicy = ReadMaxTtl(service);
         var dataDirectory = ReadDataDirectory(service, manifestPath);
         var a2aAuthentication = ReadA2aAuthentication(service, profile, secretStore);
         var sources = ReadEntries(root, "sources")
@@ -166,7 +170,8 @@ public static class SentinelManifestLoader
             queryAuthoringEnabled,
             plugins,
             secretStore?.Manifest,
-            dataDirectory);
+            dataDirectory,
+            ttlPolicy);
     }
 
     private static IReadOnlyList<string> ReadPlugins(YamlMappingNode root)
@@ -410,7 +415,7 @@ public static class SentinelManifestLoader
 
     private static ServiceProfile ReadProfile(YamlMappingNode service)
     {
-        RequireOnlyKeys(service, "service", "profile", "a2a", "webhook", "query_authoring", "data");
+        RequireOnlyKeys(service, "service", "profile", "a2a", "webhook", "query_authoring", "data", "max_ttl");
         return RequiredScalar(service, "profile", "service") switch
         {
             "demo" => ServiceProfile.Demo,
@@ -431,6 +436,23 @@ public static class SentinelManifestLoader
         if (!Uri.TryCreate(url, UriKind.Absolute, out var parsed) || parsed.Scheme is not ("http" or "https"))
             throw new ManifestLoadException("service.webhook.url must be an absolute http or https URL.");
         return parsed;
+    }
+
+    private static TtlPolicy ReadMaxTtl(YamlMappingNode service)
+    {
+        if (!service.Children.TryGetValue(new YamlScalarNode("max_ttl"), out var node))
+            return TtlPolicy.Uncapped;
+        var token = node is YamlScalarNode scalar ? scalar.Value : null;
+        if (string.IsNullOrWhiteSpace(token))
+            throw new ManifestLoadException("service.max_ttl must be none or a positive integer plus s, m, h, or d.");
+        try
+        {
+            return new TtlPolicy(TtlToken.ParseMaximum(token));
+        }
+        catch (FormatException exception)
+        {
+            throw new ManifestLoadException(exception.Message, exception);
+        }
     }
 
     private static bool ReadQueryAuthoring(YamlMappingNode service)

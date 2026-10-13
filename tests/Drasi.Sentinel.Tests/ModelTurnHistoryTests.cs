@@ -166,7 +166,7 @@ public sealed class ModelTurnHistoryTests
         var created = await service.InvokeAsync(
             principal,
             new("task", "message-1"),
-            new SubscribeToQuery(new("query"), new("first")),
+            new SubscribeToQuery(new("query"), new("first"), new Unbounded()),
             CancellationToken.None);
         var tools = Tools(service, principal, "message-2");
 

@@ -13,7 +13,8 @@ public interface IQueryWorkbench
     Task<string> InvokeAsync(
         string name,
         IReadOnlyDictionary<string, string?>? arguments,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        DateTimeOffset? grantedAt = null);
 
     Task<string?> CoverageGapAsync(string queryId, string callerText, CancellationToken cancellationToken);
 }
@@ -23,7 +24,8 @@ public sealed class QueryWorkbench(
     INativeQueryRuntime runtime,
     IAuthoredQueryStore store,
     LiveCatalog catalog,
-    IReadOnlySet<string> sourceIds) : IQueryWorkbench
+    IReadOnlySet<string> sourceIds,
+    Func<QueryId, CancellationToken, Task<bool>>? queryIsWatched = null) : IQueryWorkbench
 {
     public const string GetSourceSchemaTool = "get_source_schema";
     public const string GetGraphSchemaTool = "get_graph_schema";
@@ -48,6 +50,10 @@ public sealed class QueryWorkbench(
     };
 
     private static readonly Regex Identifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
+    private static readonly Regex DurationRequest = new(
+        @"\b(\d+)\s+(second|minute|hour)s?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    private static readonly Regex QuotedLiteral = new(@"'([^']+)'", RegexOptions.CultureInvariant);
     private const string JoinArgument = "For two labels, joins is required JSON: [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}]. Then MATCH (a:LabelA)-[:LINK]->(b:LabelB). A comma does not join.";
 
     public IReadOnlyList<AgentTool> Tools { get; } =
@@ -56,9 +62,9 @@ public sealed class QueryWorkbench(
         new(GetGraphSchemaTool, "Get the merged schema. A source that omits a schema is sampled with an unlabeled match. Use every returned label. Do not copy a label onto a source that did not return it.", (string?)null),
         new(ProfileSourceSchemaTool, "Sample a configured source and return property names plus stored example values from current rows, including a value that appears on only one row. Pass id. sampleLabels is an optional comma-separated label list. Use one of those examples for a filter. Do not write the caller's phrase or a shorter form when an example is the stored value. String comparison is case-sensitive.", [new AgentToolArgument("id", true), new AgentToolArgument("sampleLabels", false), new AgentToolArgument("limit", false)]),
         new(TestQueryTool, "Add the query under a temporary id, sample its rows, then remove it. Pass query and sources. This does not save the query. If it returns no rows, do not report that nothing was found. A future value the caller asked to watch can still be committed. " + JoinArgument, [new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false)]),
-        new(GenerateQueryTool, "Validate a draft, or scaffold one when query is omitted. Tests it unless it is not Cypher. Pass commit_as and description to save a query that tested without error, including a future value that is not present yet. commit_as is a lowercase id of letters, digits, and hyphens. sources is required. " + JoinArgument, [new AgentToolArgument("query", false), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("label", false), new AgentToolArgument("commit_as", false), new AgentToolArgument("description", false)]),
-        new(AddQueryTool, "Save a tested Cypher query and register it. Pass id, query, sources, and description. id is a lowercase id of letters, digits, and hyphens. The host binds the reaction. Then call subscribe_to_changes with id. " + JoinArgument, [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("description", true), new AgentToolArgument("joins", false)]),
-        new(UpdateQueryTool, "Replace the text of an authored query. Pass id, query, and sources. Curated queries cannot be updated. Re-test before calling this.", [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("description", false)]),
+        new(GenerateQueryTool, "Validate a draft, or scaffold one when query is omitted. Tests it unless it is not Cypher. Pass commit_as, description, and ttl to save a query that tested without error, including a future value that is not present yet. commit_as is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. sources is required. " + JoinArgument, [new AgentToolArgument("query", false), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("label", false), new AgentToolArgument("commit_as", false), new AgentToolArgument("description", false), new AgentToolArgument("ttl", false)]),
+        new(AddQueryTool, "Save a tested Cypher query and register it. Pass id, query, sources, description, and ttl. id is a lowercase id of letters, digits, and hyphens. ttl is none or a positive integer plus s, m, h, or d. A taken id is not replaced; the result Committed.Id may differ. The host binds the reaction. Then call subscribe_to_changes with Committed.Id and the same ttl. " + JoinArgument, [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("description", true), new AgentToolArgument("joins", false), new AgentToolArgument("ttl", true)]),
+        new(UpdateQueryTool, "Replace the text of an authored query that no watch is using. A watched query is not replaced. Pass id, query, and sources. Curated queries cannot be updated.", [new AgentToolArgument("id", true), new AgentToolArgument("query", true), new AgentToolArgument("sources", true), new AgentToolArgument("joins", false), new AgentToolArgument("description", false)]),
         new(ListQueriesTool, "List queries and whether each is running.", (string?)null),
         new(GetQueryResultsTool, "Return the current rows of a query. Pass id.", [new AgentToolArgument("id", true)]),
         new(RemoveQueryTool, "Remove an authored query. Curated queries cannot be removed. Pass id.", [new AgentToolArgument("id", true)]),
@@ -74,22 +80,30 @@ public sealed class QueryWorkbench(
     {
         if (string.IsNullOrWhiteSpace(callerText))
             return null;
+        var authored = await store.FindAsync(new QueryId(queryId), cancellationToken);
+        catalog.Catalog.Queries.TryGetValue(new QueryId(queryId), out var item);
+        var covered = authored?.Cypher
+            ?? (item is null ? null : item.Description + " " + string.Join(" ", item.Examples));
+        if (covered is null)
+            return null;
         var labels = (await SchemaLabelsAsync(cancellationToken))
             .Where(label => Mentions(callerText, label))
             .ToArray();
-        if (labels.Length == 0)
-            return null;
-        var authored = await store.FindAsync(new QueryId(queryId), cancellationToken);
-        var covered = authored?.Cypher
-            ?? (catalog.Catalog.Queries.TryGetValue(new QueryId(queryId), out var item)
-                ? item.Description + " " + string.Join(" ", item.Examples)
-                : null);
-        if (covered is null)
-            return null;
         var missing = labels.Where(label => !covered.Contains(label, StringComparison.OrdinalIgnoreCase)).ToArray();
-        return missing.Length == 0
-            ? null
-            : $"Query '{queryId}' does not cover {string.Join(", ", missing)}. It is only part of the request. Build a new query that includes those labels, commit it, then subscribe to the new id. Do not reuse the narrower query.";
+        if (missing.Length > 0)
+            return $"Query '{queryId}' does not cover {string.Join(", ", missing)}. It is only part of the request. Build a new query that includes those labels, commit it, then subscribe to the new id. Do not reuse the narrower query.";
+        if (DurationRequest.IsMatch(callerText) && !covered.Contains("trueFor", StringComparison.OrdinalIgnoreCase))
+            return $"Query '{queryId}' does not wait for the duration in this request. Build a new query and subscribe to the new id. Do not replace '{queryId}'.";
+        var literals = QuotedLiteral.Matches(covered)
+            .Select(match => match.Groups[1].Value)
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (literals.Length > 0 &&
+            !literals.Any(literal => callerText.Contains(literal, StringComparison.OrdinalIgnoreCase)) &&
+            item?.Examples.Any(example => callerText.Contains(example, StringComparison.OrdinalIgnoreCase)) != true)
+            return $"Query '{queryId}' filters on {string.Join(", ", literals.Select(literal => "'" + literal + "'"))} and does not match this request. Build a new query and subscribe to the new id. Do not replace '{queryId}'.";
+        return null;
     }
 
     private static bool Mentions(string text, string label)
@@ -104,14 +118,15 @@ public sealed class QueryWorkbench(
     public Task<string> InvokeAsync(
         string name,
         IReadOnlyDictionary<string, string?>? arguments,
-        CancellationToken cancellationToken) => name switch
+        CancellationToken cancellationToken,
+        DateTimeOffset? grantedAt = null) => name switch
     {
         GetSourceSchemaTool => SourceSchemaAsync(arguments, cancellationToken),
         GetGraphSchemaTool => GraphSchemaAsync(cancellationToken),
         ProfileSourceSchemaTool => ProfileAsync(arguments, cancellationToken),
-        TestQueryTool => authoring.AttemptJsonAsync(WithoutCommit(arguments), cancellationToken),
-        GenerateQueryTool => authoring.AttemptJsonAsync(arguments ?? new Dictionary<string, string?>(), cancellationToken),
-        AddQueryTool => authoring.AttemptJsonAsync(AsCommit(arguments), cancellationToken),
+        TestQueryTool => authoring.AttemptJsonAsync(WithoutCommit(arguments), cancellationToken, grantedAt),
+        GenerateQueryTool => authoring.AttemptJsonAsync(arguments ?? new Dictionary<string, string?>(), cancellationToken, grantedAt),
+        AddQueryTool => authoring.AttemptJsonAsync(AsCommit(arguments), cancellationToken, grantedAt),
         UpdateQueryTool => authoring.UpdateJsonAsync(arguments ?? new Dictionary<string, string?>(), cancellationToken),
         ListQueriesTool => ListQueriesAsync(cancellationToken),
         GetQueryResultsTool => ResultsAsync(arguments, cancellationToken),
@@ -234,6 +249,9 @@ public sealed class QueryWorkbench(
                 throw new SentinelException("query_rejected", "A curated query cannot be removed.");
             throw new SentinelException("query_unknown", $"Query '{id.Value}' does not exist.");
         }
+
+        if (queryIsWatched is not null && await queryIsWatched(id, cancellationToken))
+            throw new SentinelException("query_rejected", $"Query '{id.Value}' is already watched. Do not remove it.");
 
         await runtime.RemoveAsync(id, cancellationToken);
         await store.DeleteAsync(id, cancellationToken);

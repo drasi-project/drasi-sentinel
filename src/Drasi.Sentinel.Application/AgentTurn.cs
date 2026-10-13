@@ -17,7 +17,7 @@ public static class AgentTurn
         [SubscribeTool, ListTool, CurrentResultsTool, CancelTool];
 
     public const string SubscribeToolDescription =
-        "Create this task's one subscription for one catalog query. The host binds the reaction. Follow the instructions.";
+        "Create this task's one subscription for one catalog query. Pass ttl as none or a positive integer plus s, m, h, or d. The host binds the reaction. Follow the instructions.";
 
     public const string CurrentResultsToolDescription =
         "Return the current rows for this task's subscription. Follow the instructions.";
@@ -47,13 +47,17 @@ public static class AgentTurn
         "query_rejected" or "source_unknown" =>
             "Fix the query with get_graph_schema, profile_source_schema, and test_query. Do not subscribe until add_query commits.",
         "query_exists" =>
-            "That query id already exists. Subscribe to it, or choose another commit_as id.",
+            "That query id already exists and was not replaced. Do not subscribe to it and do not call update_query. Call add_query again and subscribe only to the id in Committed.",
+        "committed_id" =>
+            "Subscribe to the id in Message. Do not subscribe to a different id and do not call update_query.",
+        "ttl_required" or "ttl_invalid" or "ttl_unbounded" or "ttl_exceeds_max" or "ttl_exceeds_query" =>
+            "Ask the caller how long to keep the watch, then stop. Do not invent a ttl. A trueFor duration is not the watch lifetime. none is allowed only when the maximum is none.",
         "watch_ended" =>
             "The watch on this task has ended. Do not subscribe again and do not fetch current rows as a live watch.",
         _ => "Follow the instructions and continue in this turn.",
     };
 
-    public static string Render(SafeCatalog catalog, QueryAuthoringPrompt? authoring = null)
+    public static string Render(SafeCatalog catalog, QueryAuthoringPrompt? authoring = null, TtlPolicy? ttl = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var offered = CatalogBinding.From(catalog)
@@ -62,13 +66,14 @@ public static class AgentTurn
             .Select(query => new PromptQuery(query.Id.Value, query.Description, query.Examples))
             .ToArray();
         var catalogJson = "The following JSON is the authorized query catalog: " + JsonSerializer.Serialize(offered);
+        var lifetime = LifetimeRule + (ttl?.Maximum is { } maximum ? $" Maximum lifetime: {TtlToken.Format(maximum)}." : " Maximum lifetime: none.");
         if (authoring is null)
         {
-            return Body + Recovery("subscription_not_found") + " " + Recovery("task_already_has_subscription") + " " +
+            return Body + lifetime + " " + Recovery("subscription_not_found") + " " + Recovery("task_already_has_subscription") + " " +
                 catalogJson;
         }
 
-        return AuthoringPreamble + catalogJson + " " + AuthoringBody + " Configured source ids: " +
+        return AuthoringPreamble + catalogJson + " " + AuthoringBody + lifetime + " Configured source ids: " +
             JsonSerializer.Serialize(authoring.SourceIds);
     }
 
@@ -82,6 +87,9 @@ public static class AgentTurn
         "If a tool result has Kind tool_rejected, read Code and follow Next in this turn. That is not a failed task. " +
         "If a tool result has Kind watch_ended, the watch on this task has ended. Do not subscribe again and do not call get_current_task_results. " +
         "The host binds the reaction. Do not pass a reaction id. Never invent subscription ids, query ids, or states. ";
+
+    private const string LifetimeRule =
+        " A trueFor duration is not the watch lifetime. If this task has no subscription and the caller has not said how long to keep the watch, ask once and call no tools. On the answer, pass that ttl to subscribe_to_changes. If this turn also commits a query, pass the same ttl to add_query. Do not invent a ttl. ";
 
     private const string AuthoringPreamble =
         "You are a governed Drasi Sentinel assistant. Use only supplied tools. Never expose source configuration, Cypher, or secrets. " +
@@ -103,7 +111,7 @@ public static class AgentTurn
         "Call test_query or generate_query to test. If the filter matches no rows but the label has data, compare the literal to profile_source_schema examples. If it is the wrong case or a different spelling of an example, fix it and retest. If the caller asked to watch for a value that is not present yet, commit and subscribe. Do not tell the caller that nothing was found. " +
         "If the query errors, returns nothing, or a watch does not fire, call diagnose_query, diagnose_source, get_query_metrics, get_query_results, tail_logs, and watch_query. Do not guess. " +
         "watch_query observes live diffs. It cannot insert rows. There is no tool to seed a configured source. " +
-        "When the test succeeds, or the filter is the future value the caller asked to watch, call add_query, then subscribe_to_changes with that query id. If the commit is skipped, fix the query and call add_query again in this turn. Use update_query to replace an authored query. " +
+        "When the test succeeds, or the filter is the future value the caller asked to watch, call add_query, then subscribe_to_changes with the id in Committed. If that id differs from the id you passed, the earlier query was kept. Do not call update_query to make a new request fit an existing id. If the commit is skipped, fix the query and call add_query again in this turn. " +
         "Do not invent source ids. Write Cypher only in tool arguments. Do not repeat Cypher, source configuration, or secrets in the reply. ";
 
     private sealed record PromptQuery(string Id, string Description, IReadOnlyList<string> Examples);

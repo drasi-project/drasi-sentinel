@@ -31,9 +31,18 @@ messages and protobuf-style text parts remain supported.
 ## Persistence
 
 The host stores conversation tasks, subscriptions, authored queries, and
-append-only task events in `data/journal.sqlite`. The Drasi engine stores query
+append-only task events in `data/journal.sqlite`. Each committed authored
+query is also written to `data/authored-queries.json`, with its id,
+description, Cypher, sources, and joins. The agent does not repeat that
+Cypher on the task. The Drasi engine stores query
 indexes in RocksDB and plugin state in a redb file under the same `data/`
-directory, next to the manifest. The source write-ahead log is `data/wal`.
+directory, next to the manifest. A query probe deletes its index when the
+probe finishes. The next process start removes a probe index left by a crash.
+`service.max_ttl` is the longest lifetime a caller may choose. Omit it,
+or set `none`, for no cap. The agent asks how long to keep a watch when the
+message does not say. A due watch is detached and marked expired. A due
+authored query is removed only when no live watch still uses it.
+The source write-ahead log is `data/wal`.
 It does not resume a Postgres or MySQL source. Set `service.data` to another
 directory, relative to the manifest or absolute, when those files should live
 elsewhere. A Postgres source keeps its read position in the replication slot

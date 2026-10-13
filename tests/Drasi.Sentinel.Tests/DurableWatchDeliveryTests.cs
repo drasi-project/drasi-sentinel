@@ -24,7 +24,8 @@ public sealed class DurableWatchDeliveryTests
             new(new("paid-orders"), new("notify"), new("paid")),
             SubscriptionState.Degraded,
             nativeId,
-            DateTimeOffset.UnixEpoch);
+            DateTimeOffset.UnixEpoch,
+            new Unbounded());
         await repository.GetOrCreateTaskAsync(principal, subscription.TaskId, CancellationToken.None);
         await repository.GetOrCreateSubscriptionAsync(subscription, CancellationToken.None);
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
@@ -88,7 +89,8 @@ public sealed class DurableWatchDeliveryTests
             new(new("paid-orders"), new("notify"), new("paid")),
             SubscriptionState.Active,
             nativeId,
-            DateTimeOffset.UnixEpoch);
+            DateTimeOffset.UnixEpoch,
+            new Unbounded());
         await repository.GetOrCreateTaskAsync(principal, subscription.TaskId, CancellationToken.None);
         await repository.GetOrCreateSubscriptionAsync(subscription, CancellationToken.None);
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);

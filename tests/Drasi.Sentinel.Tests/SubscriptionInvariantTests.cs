@@ -54,7 +54,7 @@ public sealed class SubscriptionInvariantTests
     {
         var (service, _, principal) = await CreateAsync();
         var exception = await Assert.ThrowsAsync<SentinelException>(() =>
-            service.InvokeAsync(principal, new("task", "message"), new SubscribeToQuery(new("unknown"), new("request")), CancellationToken.None));
+            service.InvokeAsync(principal, new("task", "message"), new SubscribeToQuery(new("unknown"), new("request"), new Unbounded()), CancellationToken.None));
         Assert.Equal("query_unknown", exception.Code);
     }
 
@@ -75,7 +75,7 @@ public sealed class SubscriptionInvariantTests
             });
         var service = new ConversationSubscriptions(catalog, engine, new InMemorySentinelRepository(), new TaskEventNotifier(), TimeProvider.System);
         var exception = await Assert.ThrowsAsync<SentinelException>(() =>
-            service.InvokeAsync(Principal(), new("task", "message"), new SubscribeToQuery(new("query"), new("request")), CancellationToken.None));
+            service.InvokeAsync(Principal(), new("task", "message"), new SubscribeToQuery(new("query"), new("request"), new Unbounded()), CancellationToken.None));
         Assert.Equal("query_ambiguous", exception.Code);
     }
 
@@ -131,7 +131,7 @@ public sealed class SubscriptionInvariantTests
         var subscription = await Subscribe(service, principal, "task", "message-1", "request");
         await service.InvokeAsync(principal, new("task", "message-2"), new CancelTaskSubscription(subscription.Id), CancellationToken.None);
 
-        var ended = await service.InvokeAsync(principal, new("task", "message-3"), new SubscribeToQuery(new("query"), new("again")), CancellationToken.None);
+        var ended = await service.InvokeAsync(principal, new("task", "message-3"), new SubscribeToQuery(new("query"), new("again"), new Unbounded()), CancellationToken.None);
 
         Assert.Equal("watch_ended", ended.Kind);
         Assert.Equal(subscription.Id, ended.Subscription!.Id);
@@ -145,7 +145,7 @@ public sealed class SubscriptionInvariantTests
         var principal = Principal();
         await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
         var subscription = await repository.GetOrCreateSubscriptionAsync(
-            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Arming, new("reaction-arming"), DateTimeOffset.UtcNow),
+            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Arming, new("reaction-arming"), DateTimeOffset.UtcNow, new Unbounded()),
             CancellationToken.None);
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System);
 
@@ -162,7 +162,7 @@ public sealed class SubscriptionInvariantTests
         var principal = Principal();
         await repository.GetOrCreateTaskAsync(principal, new("task"), CancellationToken.None);
         var subscription = await repository.GetOrCreateSubscriptionAsync(
-            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Active, new("reaction-webhook"), DateTimeOffset.UtcNow),
+            new(new(Guid.NewGuid()), new("task"), principal.Tenant, principal.Owner, new(new("query"), new("reaction"), new("request")), SubscriptionState.Active, new("reaction-webhook"), DateTimeOffset.UtcNow, new Unbounded()),
             CancellationToken.None);
         var webhook = new RecordingWebhook();
         var ingestion = new NativeResultIngestion(repository, new TaskEventNotifier(), TimeProvider.System, webhook);
@@ -296,7 +296,7 @@ public sealed class SubscriptionInvariantTests
             .Any(item => item.Kind == ConversationEventKind.Observation);
 
     private static async Task<ConversationSubscription> Subscribe(IConversationSubscriptions service, Principal principal, string task, string message, string key) =>
-        (await service.InvokeAsync(principal, new(task, message), new SubscribeToQuery(new("query"), new(key)), CancellationToken.None)).Subscription!;
+        (await service.InvokeAsync(principal, new(task, message), new SubscribeToQuery(new("query"), new(key), new Unbounded()), CancellationToken.None)).Subscription!;
     private static Principal Principal(string owner = "owner") => new(new("tenant"), new(owner));
     private static string DiffType(ConversationEvent observation)
     {

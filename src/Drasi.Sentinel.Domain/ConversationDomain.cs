@@ -51,7 +51,8 @@ public sealed record ConversationSubscription(
     SubscriptionRequest Request,
     SubscriptionState State,
     NativeSubscriptionId NativeSubscriptionId,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    Lifetime Expires);
 
 public sealed record ConversationEvent(
     ConversationTaskId TaskId,

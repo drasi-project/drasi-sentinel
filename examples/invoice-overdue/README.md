@@ -13,7 +13,7 @@ dotnet run --project ../../src/Drasi.Sentinel.Host -- sentinel.yaml
 In A2A Inspector connect to the Agent Card, click **Send streaming**, and ask:
 
 ```text
-Tell me as soon as an invoice is overdue.
+Tell me as soon as an invoice is overdue. Keep the watch for 7 days.
 ```
 
 Keep the task stream open or reconnect with `SubscribeToTask` and

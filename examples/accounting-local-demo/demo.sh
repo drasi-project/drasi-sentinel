@@ -127,7 +127,7 @@ Connect A2A Inspector to:
   Webhook capture: $webhook_log
 
 In A2A Inspector, click Send streaming and ask:
-  Tell me when an invoice is paid.
+  Tell me when an invoice is paid. Keep the watch for 7 days.
 
 Inspector sends the standard A2A SendStreamingMessage request and renders
 the task updates. If the task stream disconnects, click Resume task stream

@@ -14,7 +14,7 @@ the demo.
 In Inspector send a message and ask:
 
 ```text
-Tell me when an invoice is paid.
+Tell me when an invoice is paid. Keep the watch for 7 days.
 ```
 
 The manifest sets `service.query_authoring.enabled` to true, so a description

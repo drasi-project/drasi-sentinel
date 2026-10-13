@@ -48,6 +48,10 @@ public sealed class AgentToolSession : IAgentTools
     private readonly TaskTurnId _turn;
     private readonly CancellationToken _cancellationToken;
     private readonly string? _callerText;
+    private readonly TtlPolicy? _ttlPolicy;
+    private readonly TimeProvider _time;
+    private readonly DateTimeOffset _grantedAt;
+    private string? _committedQueryId;
 
     private AgentToolSession(
         IConversationSubscriptions commands,
@@ -55,7 +59,9 @@ public sealed class AgentToolSession : IAgentTools
         TaskTurnId turn,
         CancellationToken cancellationToken,
         IQueryWorkbench? workbench,
-        string? callerText)
+        string? callerText,
+        TtlPolicy? ttlPolicy,
+        TimeProvider? time)
     {
         _commands = commands;
         _workbench = workbench;
@@ -63,9 +69,12 @@ public sealed class AgentToolSession : IAgentTools
         _turn = turn;
         _cancellationToken = cancellationToken;
         _callerText = callerText;
+        _ttlPolicy = ttlPolicy;
+        _time = time ?? TimeProvider.System;
+        _grantedAt = _time.GetUtcNow();
         var tools = new List<AgentTool>
         {
-            new(AgentTurn.SubscribeTool, AgentTurn.SubscribeToolDescription, "query"),
+            new(AgentTurn.SubscribeTool, AgentTurn.SubscribeToolDescription, [new AgentToolArgument("query", true), new AgentToolArgument("ttl", true)]),
             new(AgentTurn.ListTool, AgentTurn.ListToolDescription, (string?)null),
             new(AgentTurn.CurrentResultsTool, AgentTurn.CurrentResultsToolDescription, (string?)null),
             new(AgentTurn.CancelTool, AgentTurn.CancelToolDescription, "id"),
@@ -84,8 +93,10 @@ public sealed class AgentToolSession : IAgentTools
         TaskTurnId turn,
         CancellationToken cancellationToken,
         IQueryWorkbench? workbench = null,
-        string? callerText = null) =>
-        new(commands, principal, turn, cancellationToken, workbench, callerText);
+        string? callerText = null,
+        TtlPolicy? ttlPolicy = null,
+        TimeProvider? time = null) =>
+        new(commands, principal, turn, cancellationToken, workbench, callerText, ttlPolicy, time);
 
     public Task<string> InvokeAsync(string name, IReadOnlyDictionary<string, string?>? arguments = null)
     {
@@ -93,7 +104,7 @@ public sealed class AgentToolSession : IAgentTools
         return name switch
         {
             AgentTurn.SubscribeTool => Argument(arguments, "query") is { } query
-                ? SubscribeAsync(query)
+                ? SubscribeAsync(query, Argument(arguments, "ttl"))
                 : Task.FromResult(Rejected("invalid_tool_arguments", "Pass the query id.")),
             AgentTurn.ListTool => InvokeAsync(new ListTaskSubscriptions()),
             AgentTurn.CurrentResultsTool => InvokeAsync(new GetCurrentTaskResults()),
@@ -105,14 +116,29 @@ public sealed class AgentToolSession : IAgentTools
         };
     }
 
-    private async Task<string> SubscribeAsync(string query)
+    private async Task<string> SubscribeAsync(string query, string? ttl)
     {
+        Lifetime expires;
+        try
+        {
+            expires = _ttlPolicy is null && string.IsNullOrWhiteSpace(ttl)
+                ? new Unbounded()
+                : TtlToken.Admit(ttl, _ttlPolicy ?? TtlPolicy.Uncapped, _grantedAt);
+        }
+        catch (SentinelException exception)
+        {
+            return Rejected(exception.Code, exception.Message);
+        }
+
+        if (_committedQueryId is not null && !string.Equals(query, _committedQueryId, StringComparison.Ordinal))
+            return Rejected("committed_id", $"Subscribe to '{_committedQueryId}'. Do not subscribe to '{query}'.");
         if (_workbench is not null && !string.IsNullOrWhiteSpace(_callerText) &&
             await _workbench.CoverageGapAsync(query, _callerText, _cancellationToken) is { } gap)
             return Rejected("query_rejected", gap);
         return await InvokeAsync(new SubscribeToQuery(
             new QueryId(query),
-            new SubscriptionRequestKey($"a2a:{_turn.TaskId}:{_turn.MessageId}:request")));
+            new SubscriptionRequestKey($"a2a:{_turn.TaskId}:{_turn.MessageId}:request"),
+            expires));
     }
 
     private async Task<string> WorkbenchAsync(string name, IReadOnlyDictionary<string, string?>? arguments)
@@ -121,7 +147,10 @@ public sealed class AgentToolSession : IAgentTools
             return Rejected("invalid_tool_arguments", "The tool name is not valid.");
         try
         {
-            return await _workbench.InvokeAsync(name, WithCallerText(name, arguments), _cancellationToken);
+            var result = await _workbench.InvokeAsync(name, WithCallerText(name, arguments), _cancellationToken, _grantedAt);
+            if (CommittedQueryId(result) is { } id)
+                _committedQueryId = id;
+            return result;
         }
         catch (SentinelException exception) when (IsRecoverable(exception))
         {
@@ -162,6 +191,23 @@ public sealed class AgentToolSession : IAgentTools
         return copy;
     }
 
+    private static string? CommittedQueryId(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty("Committed", out var committed) ||
+                committed.ValueKind != JsonValueKind.Object ||
+                !committed.TryGetProperty("Id", out var id))
+                return null;
+            return id.GetString() is { Length: > 0 } value ? value : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string? Argument(IReadOnlyDictionary<string, string?>? arguments, string name) =>
         arguments is not null && arguments.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value
@@ -178,7 +224,12 @@ public sealed class AgentToolSession : IAgentTools
             or "invalid_tool_arguments"
             or "query_rejected"
             or "source_unknown"
-            or "query_exists";
+            or "query_exists"
+            or "ttl_required"
+            or "ttl_invalid"
+            or "ttl_unbounded"
+            or "ttl_exceeds_max"
+            or "ttl_exceeds_query";
 
     private static string Success(ToolResult result) => JsonSerializer.Serialize(new
     {
@@ -201,6 +252,7 @@ public sealed class AgentToolSession : IAgentTools
         SubscriptionId = subscription.Id.Value,
         QueryId = subscription.Request.QueryId.Value,
         State = subscription.State.ToString(),
+        ExpiresAt = subscription.Expires.Instant,
     };
 
     private string Rejected(string code, string message) => JsonSerializer.Serialize(new

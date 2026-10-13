@@ -70,7 +70,8 @@ builder.Services.AddSingleton(services => new ConversationSubscriptions(
     services.GetRequiredService<INativeEngine>(),
     services.GetRequiredService<IConversationRepository>(),
     services.GetRequiredService<ITaskEventNotifier>(),
-    TimeProvider.System));
+TimeProvider.System,
+services.GetRequiredService<IAuthoredQueryStore>()));
 builder.Services.AddSingleton<IConversationSubscriptions>(services =>
     services.GetRequiredService<ConversationSubscriptions>());
 if (manifest.QueryAuthoringEnabled)
@@ -83,14 +84,30 @@ if (manifest.QueryAuthoringEnabled)
         services.GetRequiredService<IAuthoredQueryStore>(),
         liveCatalog,
         sourceIds,
-        manifest.SafeCatalog.Reactions.Keys.Single()));
+        manifest.SafeCatalog.Reactions.Keys.Single(),
+        async (id, cancellationToken) =>
+            (await services.GetRequiredService<IConversationRepository>().ListRestorableSubscriptionsAsync(cancellationToken))
+            .Any(subscription => subscription.Request.QueryId == id),
+        manifest.TtlPolicy,
+        TimeProvider.System));
     builder.Services.AddSingleton<IQueryWorkbench>(services => new QueryWorkbench(
         services.GetRequiredService<IQueryAuthoring>(),
         services.GetRequiredService<INativeQueryRuntime>(),
         services.GetRequiredService<IAuthoredQueryStore>(),
         liveCatalog,
-        sourceIds));
+        sourceIds,
+        async (id, cancellationToken) =>
+            (await services.GetRequiredService<IConversationRepository>().ListRestorableSubscriptionsAsync(cancellationToken))
+            .Any(subscription => subscription.Request.QueryId == id)));
 }
+builder.Services.AddSingleton(services => new WatchExpiry(
+    services.GetRequiredService<IConversationRepository>(),
+    services.GetRequiredService<IAuthoredQueryStore>(),
+    services.GetRequiredService<INativeEngine>(),
+    services.GetRequiredService<INativeQueryRuntime>(),
+    liveCatalog,
+    services.GetRequiredService<ITaskEventNotifier>(),
+    TimeProvider.System));
 
 if (manifest.Agent is { } agent)
 {
@@ -103,7 +120,9 @@ if (manifest.Agent is { } agent)
         services.GetRequiredService<IConversationSubscriptions>(),
         services.GetRequiredService<ILanguageModel>(),
         services.GetService<IQueryWorkbench>(),
-        services.GetService<QueryAuthoringPrompt>()));
+        services.GetService<QueryAuthoringPrompt>(),
+        manifest.TtlPolicy,
+        TimeProvider.System));
 }
 else
 {
@@ -123,6 +142,8 @@ await app.Services.GetRequiredService<SqliteSentinelRepository>()
 _ = app.Services.GetRequiredService<NativeResultIngestion>()
     .RunAsync(app.Lifetime.ApplicationStopping);
 await native.StartAsync(app.Lifetime.ApplicationStopping);
+var expiry = app.Services.GetRequiredService<WatchExpiry>();
+await expiry.SweepAsync(app.Lifetime.ApplicationStopping);
 await RestoreAuthoredQueriesAsync(
     app.Services.GetRequiredService<IAuthoredQueryStore>(),
     native,
@@ -132,6 +153,7 @@ await RestoreAuthoredQueriesAsync(
 await app.Services.GetRequiredService<ConversationSubscriptions>()
     .RestoreWatchesAsync(app.Lifetime.ApplicationStopping);
 await native.StartFeedsAsync(app.Lifetime.ApplicationStopping);
+_ = expiry.RunAsync(app.Lifetime.ApplicationStopping);
 app.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(
     () => engine.DisposeAsync().AsTask().GetAwaiter().GetResult());
 

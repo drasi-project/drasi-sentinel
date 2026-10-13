@@ -7,7 +7,9 @@ public sealed class CatalogAgentResponder(
     IConversationSubscriptions commands,
     ILanguageModel model,
     IQueryWorkbench? workbench = null,
-    QueryAuthoringPrompt? authoringPrompt = null) : IAgentResponder
+    QueryAuthoringPrompt? authoringPrompt = null,
+    TtlPolicy? ttlPolicy = null,
+    TimeProvider? time = null) : IAgentResponder
 {
     public Task<string> RespondAsync(
         Principal principal,
@@ -17,9 +19,9 @@ public sealed class CatalogAgentResponder(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken, workbench, input);
+        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken, workbench, input, ttlPolicy, time);
         return model.CompleteAsync(
-            AgentTurn.Render(catalog, authoringPrompt),
+            AgentTurn.Render(catalog, authoringPrompt, ttlPolicy),
             tools,
             AgentMessages.Create(priorAssistantTexts, input),
             cancellationToken);

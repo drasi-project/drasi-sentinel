@@ -72,7 +72,8 @@ public sealed class NativeResultIngestion(
         var subscription = await repository.GetSubscriptionByNativeIdAsync(subscriptionId, cancellationToken);
         if (subscription is null)
             throw new InvalidOperationException($"No watch is registered for reaction {subscriptionId.Value}.");
-        if (subscription.State is SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired)
+        if (subscription.State is SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired
+            || subscription.Expires.IsDue(timeProvider.GetUtcNow()))
             return;
         if (subscription.State is not (SubscriptionState.Arming or SubscriptionState.Active or SubscriptionState.Degraded))
             throw new InvalidOperationException($"Watch {subscription.Id.Value} cannot accept a diff while {subscription.State}.");

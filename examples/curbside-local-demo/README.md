@@ -48,7 +48,8 @@ The script prints these prompts:
    still being prepared.
 
 The prompts describe the situation. They do not include Cypher. The agent
-reads the sources and builds the query.
+reads the sources and builds the query. The committed definition is
+`data/authored-queries.json`.
 
 ## Drive a change
 

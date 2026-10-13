@@ -116,7 +116,7 @@ ENDPOINT="$(awk -F= '$1=="agent_endpoint" {print $2}' "$CONNECTION")"
 curl --no-buffer --silent --show-error --max-time 120 \
 	-H 'Content-Type: application/json' \
 	-X POST "$ENDPOINT" \
-	--data "{\"jsonrpc\":\"2.0\",\"id\":\"live-send\",\"method\":\"SendStreamingMessage\",\"params\":{\"message\":{\"role\":\"ROLE_USER\",\"taskId\":\"$TASK_ID\",\"messageId\":\"request-$TASK_ID\",\"parts\":[{\"text\":\"Tell me when an invoice is paid.\",\"mediaType\":\"text/plain\"}]}}}" \
+	--data "{\"jsonrpc\":\"2.0\",\"id\":\"live-send\",\"method\":\"SendStreamingMessage\",\"params\":{\"message\":{\"role\":\"ROLE_USER\",\"taskId\":\"$TASK_ID\",\"messageId\":\"request-$TASK_ID\",\"parts\":[{\"text\":\"Tell me when an invoice is paid. Keep the watch for 7 days.\",\"mediaType\":\"text/plain\"}]}}}" \
 	>"$EVENTS" &
 stream_pid=$!
 wait_for_active_subscription || { cat "$EVENTS" >&2; exit 1; }

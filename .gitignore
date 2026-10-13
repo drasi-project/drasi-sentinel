@@ -5,3 +5,4 @@ obj/
 !.env.example
 temp.json
 data/
+.DS_Store
