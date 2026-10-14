@@ -20,6 +20,18 @@ public sealed class A2aStreamingTests
     }
 
     [Fact]
+    public void Follow_up_without_task_id_continues_the_context()
+    {
+        using var document = JsonDocument.Parse("""
+            {"jsonrpc":"2.0","id":"2","method":"SendStreamingMessage","params":{"message":{"role":"ROLE_USER","contextId":"task-1","messageId":"msg-2","parts":[{"text":"vehicle location"}]}}}
+            """);
+        var request = A2aMessageRequest.Parse(document.RootElement);
+        Assert.Equal("task-1", request.Message.TaskId);
+        Assert.Equal("msg-2", request.Message.MessageId);
+        Assert.Equal("vehicle location", request.Message.Text);
+    }
+
+    [Fact]
     public void Subscribe_to_task_accepts_inspector_method()
     {
         using var document = JsonDocument.Parse("""{"jsonrpc":"2.0","id":1,"method":"SubscribeToTask","params":{"taskId":"task-1"}}""");

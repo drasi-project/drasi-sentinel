@@ -331,7 +331,7 @@ public sealed class A2aPushNotificationTests
             Principal principal,
             TaskTurnId turn,
             string input,
-            IReadOnlyList<string> priorAssistantTexts,
+            IReadOnlyList<AgentMessage> priorTurns,
             CancellationToken cancellationToken) =>
             Task.FromResult("ok");
     }

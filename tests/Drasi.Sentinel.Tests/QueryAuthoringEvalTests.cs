@@ -184,11 +184,13 @@ public sealed class QueryAuthoringEvalTests
             "subscribe_to_changes",
             "Do not invent source ids",
             "uncovered words",
+            "IS NOT NULL",
             "was not deployed",
             "Do not ask the caller whether to continue",
             "not a substitute",
             "Once every stated condition is mapped",
             "Do not end with a question that asks whether to start",
+            "already named",
         })
         {
             Assert.Contains(rule, enabled, StringComparison.Ordinal);
@@ -301,6 +303,44 @@ public sealed class QueryAuthoringEvalTests
         Assert.Contains("uncovered words", unseen, StringComparison.Ordinal);
         Assert.Contains("stranded", unseen, StringComparison.Ordinal);
         Assert.DoesNotContain("Committed", unseen, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_property_name_does_not_make_presence_a_watch()
+    {
+        const string caller = """
+            Tell me when an order is ready for pickup and the customer is waiting.
+            vehicle location
+            """;
+        var presence = "MATCH (v:vehicles) WHERE v.location IS NOT NULL RETURN v.plate";
+        Assert.Contains("waiting", QueryWorkbench.UncoveredConditions(caller, presence));
+        Assert.Contains("ready", QueryWorkbench.UncoveredConditions(caller, presence));
+
+        var guessedValue = "MATCH (o:orders)-[:LINK]->(v:vehicles) WHERE o.status = 'ready' AND v.location = 'Curbside' RETURN o.id";
+        Assert.Contains("waiting", QueryWorkbench.UncoveredConditions(caller, guessedValue));
+
+        var mapped = """
+            Tell me when an order is ready for pickup and the customer is waiting.
+            vehicle location
+            Curbside
+            """;
+        var covered = "MATCH (o:orders)-[:PLATE]->(v:vehicles) WHERE o.status = 'ready' AND v.location = 'Curbside' RETURN o.id";
+        Assert.Empty(QueryWorkbench.UncoveredConditions(mapped, covered));
+    }
+
+    [Fact]
+    public void An_invented_relationship_without_joins_is_not_a_join()
+    {
+        var schema = new SourceGraph(
+            [
+                new GraphNode("orders", [new GraphProperty("id", "string"), new GraphProperty("plate", "string"), new GraphProperty("status", "string")], ["orders-db"]),
+                new GraphNode("vehicles", [new GraphProperty("plate", "string"), new GraphProperty("location", "string")], ["fleet-db"]),
+            ],
+            [],
+            []);
+        var cypher = "MATCH (o:orders)-[:LINK]->(v:vehicles) WHERE o.plate = v.plate AND o.status = 'ready' AND v.location = 'Curbside' RETURN o.id";
+        var analysis = QueryText.Examine(cypher, schema, []);
+        Assert.Contains(analysis.Warnings, warning => warning.Contains("declares no joins", StringComparison.Ordinal));
     }
 
     [Fact]

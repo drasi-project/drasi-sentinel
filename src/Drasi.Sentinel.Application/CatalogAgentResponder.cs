@@ -15,15 +15,16 @@ public sealed class CatalogAgentResponder(
         Principal principal,
         TaskTurnId turn,
         string input,
-        IReadOnlyList<string> priorAssistantTexts,
+        IReadOnlyList<AgentMessage> priorTurns,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var tools = AgentToolSession.Create(commands, principal, turn, cancellationToken, workbench, input, ttlPolicy, time);
+        var tools = AgentToolSession.Create(
+            commands, principal, turn, cancellationToken, workbench, AgentMessages.CallerText(priorTurns, input), ttlPolicy, time);
         return model.CompleteAsync(
             AgentTurn.Render(catalog, authoringPrompt, ttlPolicy),
             tools,
-            AgentMessages.Create(priorAssistantTexts, input),
+            AgentMessages.Create(priorTurns, input),
             cancellationToken);
     }
 }

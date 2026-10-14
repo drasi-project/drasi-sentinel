@@ -28,6 +28,7 @@ public enum ConversationEventKind
     Observation,
     TaskCompleted,
     TaskFailed,
+    CallerUtterance,
 }
 
 public sealed record ConversationTask(

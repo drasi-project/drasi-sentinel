@@ -16,7 +16,7 @@ public sealed class UnconfiguredAgentResponder : IAgentResponder
         Principal principal,
         TaskTurnId turn,
         string input,
-        IReadOnlyList<string> priorAssistantTexts,
+        IReadOnlyList<AgentMessage> priorTurns,
         CancellationToken cancellationToken) =>
         throw new A2aAgentUnconfiguredException();
 }
@@ -87,10 +87,11 @@ public static class A2aEndpoint
                 var turn = new TaskTurnId(taskId.Value, request.Message.MessageId);
                 await repository.GetOrCreateTaskAsync(principal, taskId, context.RequestAborted);
                 await RememberPushConfigAsync(repository, principal, taskId, request, context.RequestAborted);
-                var priorAssistantTexts = await ConversationTurnHistory.LoadAssistantTextsAsync(
+                var priorTurns = await ConversationTurnHistory.LoadTurnsAsync(
                     repository, principal.Owner, taskId, context.RequestAborted);
+                await RememberCallerAsync(repository, principal, taskId, request.Message.Text, context.RequestAborted);
                 var response = await responder.RespondAsync(
-                    principal, turn, request.Message.Text, priorAssistantTexts, context.RequestAborted);
+                    principal, turn, request.Message.Text, priorTurns, context.RequestAborted);
                 await repository.AppendAssistantArtifactAsync(principal, taskId, response, context.RequestAborted);
                 notifier.Notify(taskId);
                 return Results.Json(OneShot(request, taskId, response));
@@ -140,6 +141,21 @@ public static class A2aEndpoint
         catch (SentinelException exception) { return Error(request.RequestId, -32002, exception.Message, exception.Code); }
     }
 
+    private static Task RememberCallerAsync(
+        IConversationRepository repository,
+        Principal principal,
+        ConversationTaskId taskId,
+        string input,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return Task.CompletedTask;
+        return repository.AppendEventAsync(
+            principal.Owner,
+            new ConversationEvent(taskId, default, ConversationEventKind.CallerUtterance, null, input, DateTimeOffset.UtcNow),
+            cancellationToken);
+    }
+
     private static async Task RememberPushConfigAsync(
         IConversationRepository repository,
         Principal principal,
@@ -166,16 +182,17 @@ public static class A2aEndpoint
     {
         try
         {
-            var priorAssistantTexts = await ConversationTurnHistory.LoadAssistantTextsAsync(
+            var priorTurns = await ConversationTurnHistory.LoadTurnsAsync(
                 repository,
                 principal.Owner,
                 taskId,
                 CancellationToken.None);
+            await RememberCallerAsync(repository, principal, taskId, input, CancellationToken.None);
             var response = await responder.RespondAsync(
                 principal,
                 turn,
                 input,
-                priorAssistantTexts,
+                priorTurns,
                 cancellationToken);
             await repository.AppendAssistantArtifactAsync(
                 principal,
@@ -229,6 +246,12 @@ internal sealed class SseTaskResult(
             ConversationEvent? last = null;
             foreach (var item in events)
             {
+                if (item.Kind == ConversationEventKind.CallerUtterance)
+                {
+                    cursor = item.Sequence;
+                    last = item;
+                    continue;
+                }
                 await context.Response.WriteAsync($"id: {item.Sequence.Value}\ndata: {JsonSerializer.Serialize(Project(item))}\n\n", context.RequestAborted);
                 await context.Response.Body.FlushAsync(context.RequestAborted);
                 cursor = item.Sequence;

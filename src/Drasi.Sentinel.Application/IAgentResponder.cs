@@ -8,6 +8,6 @@ public interface IAgentResponder
         Principal principal,
         TaskTurnId turn,
         string input,
-        IReadOnlyList<string> priorAssistantTexts,
+        IReadOnlyList<AgentMessage> priorTurns,
         CancellationToken cancellationToken);
 }

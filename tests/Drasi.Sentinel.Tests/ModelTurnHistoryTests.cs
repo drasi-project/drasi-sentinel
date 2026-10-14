@@ -79,7 +79,7 @@ public sealed class ModelTurnHistoryTests
             Principal(),
             new("task", "message"),
             "yes",
-            ["I can check current results."],
+            [new AgentMessage(AgentRole.Assistant, "I can check current results.")],
             CancellationToken.None);
 
         Assert.Equal("reported-rows", response);
@@ -237,7 +237,7 @@ public sealed class ModelTurnHistoryTests
     [Theory]
     [InlineData("message/send")]
     [InlineData("message/stream")]
-    public async Task Both_delivery_paths_pass_prior_assistant_text_and_do_not_store_the_user_text(string method)
+    public async Task Both_delivery_paths_keep_prior_caller_text_and_store_the_current_utterance(string method)
     {
         var repository = new InMemorySentinelRepository();
         var principal = A2aPrincipalFactory.Create(new ClaimsPrincipal(), new A2aAnonymousManifest());
@@ -245,7 +245,8 @@ public sealed class ModelTurnHistoryTests
         await repository.GetOrCreateTaskAsync(principal, taskId, CancellationToken.None);
         for (var i = 0; i < ConversationTurnHistory.PageSize; i++)
             await Append(repository, principal, taskId, ConversationEventKind.Observation, $"observation-{i}");
-        await Append(repository, principal, taskId, ConversationEventKind.AssistantArtifact, "I can check current results.");
+        await Append(repository, principal, taskId, ConversationEventKind.CallerUtterance, "Tell me when an order is open and the parcel is stranded.");
+        await Append(repository, principal, taskId, ConversationEventKind.AssistantArtifact, "Which stored value should represent stranded?");
         var responder = new RecordingResponder();
 
         await A2aEndpoint.SendAsync(
@@ -263,9 +264,12 @@ public sealed class ModelTurnHistoryTests
         }
 
         Assert.Equal("yes", responder.Input);
-        Assert.Equal(["I can check current results."], responder.PriorAssistantTexts);
+        Assert.Equal(
+            ["Tell me when an order is open and the parcel is stranded.", "Which stored value should represent stranded?"],
+            responder.PriorTurns.Select(message => message.Text));
+        Assert.Equal([AgentRole.User, AgentRole.Assistant], responder.PriorTurns.Select(message => message.Role));
         var events = await repository.ReadEventsAsync(principal.Owner, taskId, new(0), 200, CancellationToken.None);
-        Assert.DoesNotContain(events, item => item.Content.Contains("yes", StringComparison.Ordinal));
+        Assert.Contains(events, item => item.Kind == ConversationEventKind.CallerUtterance && item.Content == "yes");
         Assert.Contains(events, item => item.Kind == ConversationEventKind.AssistantArtifact && item.Content == "reported-rows");
     }
 
@@ -363,18 +367,18 @@ public sealed class ModelTurnHistoryTests
     private sealed class RecordingResponder : IAgentResponder
     {
         public string? Input { get; private set; }
-        public IReadOnlyList<string>? PriorAssistantTexts { get; private set; }
+        public IReadOnlyList<AgentMessage> PriorTurns { get; private set; } = [];
         public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<string> RespondAsync(
             Principal principal,
             TaskTurnId turn,
             string input,
-            IReadOnlyList<string> priorAssistantTexts,
+            IReadOnlyList<AgentMessage> priorTurns,
             CancellationToken cancellationToken)
         {
             Input = input;
-            PriorAssistantTexts = priorAssistantTexts;
+            PriorTurns = priorTurns;
             Completed.TrySetResult();
             return Task.FromResult("reported-rows");
         }

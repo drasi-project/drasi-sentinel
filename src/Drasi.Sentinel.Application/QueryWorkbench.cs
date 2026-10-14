@@ -126,7 +126,7 @@ public sealed class QueryWorkbench(
             .Select(match => match.Value.ToLowerInvariant())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var gaps = new List<string>();
+        var pending = new List<(string? Subject, string Complement)>();
         foreach (Match match in Regex.Matches(
             callerText,
             @"\b([A-Za-z]{4,})\s+is\s+(?:still\s+)?(?:being\s+)?([A-Za-z]{4,})\b|\b(?:been|being)\s+([A-Za-z]{4,})\b",
@@ -142,12 +142,38 @@ public sealed class QueryWorkbench(
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
             if (place.Success && Covers(tokens, place.Groups[1].Value))
                 continue;
+            pending.Add((subject, complement));
+        }
+
+        if (pending.Count == 1 && NamedEqualityCovers(callerText, covered))
+            pending.Clear();
+
+        var gaps = new List<string>();
+        foreach (var (subject, complement) in pending)
+        {
             if (subject is not null && !Stopwords.Contains(subject) && !Covers(tokens, subject))
                 gaps.Add(subject);
             gaps.Add(complement);
         }
 
         return gaps.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool NamedEqualityCovers(string callerText, string covered)
+    {
+        foreach (Match filter in Regex.Matches(
+            covered,
+            @"\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']+)'",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var property = filter.Groups[1].Value;
+            var literal = filter.Groups[2].Value;
+            if (Regex.IsMatch(callerText, $@"\b{Regex.Escape(property)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+                Regex.IsMatch(callerText, $@"\b{Regex.Escape(literal)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool Covers(IReadOnlyList<string> tokens, string word)

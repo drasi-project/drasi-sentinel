@@ -63,7 +63,10 @@ public sealed record A2aMessageRequest(
         }
 
         var messageId = RequiredString(message, "messageId");
-        var taskId = OptionalString(message, "taskId") ?? messageId;
+        var taskId = OptionalString(message, "taskId")
+            ?? OptionalString(message, "contextId")
+            ?? OptionalString(message, "context_id")
+            ?? messageId;
         if (!message.TryGetProperty("parts", out var parts) || parts.ValueKind != JsonValueKind.Array || parts.GetArrayLength() != 1)
         {
             throw new A2aProtocolException("invalid_params", "A user message must contain exactly one text/plain part.");

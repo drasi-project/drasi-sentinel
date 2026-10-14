@@ -63,6 +63,9 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
     public List<QueryProbeCall> Probes { get; } = [];
     public JsonNode Row { get; set; } = JsonNode.Parse("""{"id":"1","status":"open"}""")!;
     public Dictionary<string, JsonNode?> Schemas { get; } = new(StringComparer.Ordinal);
+    public Dictionary<string, IReadOnlyList<JsonNode>> LabelSamples { get; } = new(StringComparer.Ordinal);
+    public JsonNode? GraphSchema { get; set; }
+    public IReadOnlyList<string>? ListedSourceIds { get; set; }
     public bool FailCombinedProbes { get; set; }
 
     public SourceGraph? Graph { get; set; }
@@ -80,6 +83,12 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
         Probes.Add(new QueryProbeCall(cypher, sourceIds, joins));
         if (FailCombinedProbes && sourceIds.Count > 1)
             return Task.FromResult(new QueryProbe(false, [], "One source rejected the label."));
+        var sampled = System.Text.RegularExpressions.Regex.Match(
+            cypher,
+            @"MATCH\s*\(n:([A-Za-z_][A-Za-z0-9_]*)\)\s*RETURN\s+n\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        if (sampled.Success && LabelSamples.TryGetValue(sampled.Groups[1].Value, out var samples))
+            return Task.FromResult(new QueryProbe(true, samples.Select(row => row.DeepClone()).ToArray(), null));
         if (cypher.Contains("'OPEN'", StringComparison.Ordinal) || cypher.Contains("'shipped'", StringComparison.Ordinal))
             return Task.FromResult(new QueryProbe(true, [], null));
         var row = cypher.Contains("payments", StringComparison.Ordinal)
@@ -125,13 +134,13 @@ internal sealed class RecordingRuntime : INativeQueryRuntime
     }
 
     public Task<JsonNode> GraphSchemaAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<JsonNode>(JsonNode.Parse("""{"nodes":{"orders":{},"payments":{}},"relations":{},"sourcesWithoutSchema":[]}""")!);
+        Task.FromResult(GraphSchema?.DeepClone() ?? JsonNode.Parse("""{"nodes":{"orders":{},"payments":{}},"relations":{},"sourcesWithoutSchema":[]}""")!);
 
     public Task<IReadOnlyList<ComponentSnapshot>> ListQueriesAsync(CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<ComponentSnapshot>>(Added.Select(query => new ComponentSnapshot(query.Id.Value, "Running")).ToArray());
 
     public Task<IReadOnlyList<ComponentSnapshot>> ListSourcesAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<ComponentSnapshot>>(QueryAuthoringEvalSupport.SourceIds.Select(id => new ComponentSnapshot(id, "Running")).ToArray());
+        Task.FromResult<IReadOnlyList<ComponentSnapshot>>((ListedSourceIds ?? QueryAuthoringEvalSupport.SourceIds).Select(id => new ComponentSnapshot(id, "Running")).ToArray());
 
     public Task<IReadOnlyList<JsonNode>> ResultsAsync(QueryId id, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<JsonNode>>([JsonNode.Parse("""{"id":"1"}""")!]);
