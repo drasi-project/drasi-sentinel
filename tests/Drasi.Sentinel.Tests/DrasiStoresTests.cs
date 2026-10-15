@@ -110,7 +110,10 @@ public sealed class DrasiStoresTests
             var events = await reopened.ReadEventsAsync(principal.Owner, new("task"), new(0), 10, CancellationToken.None);
             Assert.Equal("one", Assert.Single(events).Content);
             Assert.Equal(Path.Combine(directory, "data", SqliteSentinelRepository.FileName), path);
-            Assert.Equal("[]", (await File.ReadAllTextAsync(Path.Combine(directory, "data", SqliteSentinelRepository.AuthoredQueriesFileName))).Trim());
+            var authored = Path.Combine(directory, "data", SqliteSentinelRepository.AuthoredQueriesDirectoryName);
+            Assert.True(Directory.Exists(authored));
+            Assert.Empty(Directory.EnumerateFiles(authored, "*.json"));
+            Assert.False(File.Exists(Path.Combine(directory, "data", "authored-queries.json")));
         }
         finally
         {
@@ -136,14 +139,28 @@ public sealed class DrasiStoresTests
                 new Unbounded()),
                 CancellationToken.None);
 
-            var path = Path.Combine(directory, SqliteSentinelRepository.AuthoredQueriesFileName);
+            var directoryPath = Path.Combine(directory, SqliteSentinelRepository.AuthoredQueriesDirectoryName);
+            var path = Path.Combine(directoryPath, "ready-orders.json");
             var written = await File.ReadAllTextAsync(path);
             Assert.Contains("\"id\": \"ready-orders\"", written, StringComparison.Ordinal);
             Assert.Contains("MATCH (n:orders)", written, StringComparison.Ordinal);
             Assert.Contains("\"id\": \"PLATE\"", written, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(directory, "authored-queries.json")));
+
+            await repository.SaveAsync(new AuthoredQuery(
+                new("parked-vehicles"),
+                "Parked vehicles.",
+                "MATCH (n:vehicles) WHERE n.location = 'Parking' RETURN n.plate AS plate",
+                ["fleet"],
+                [],
+                new Unbounded()),
+                CancellationToken.None);
+            Assert.True(File.Exists(Path.Combine(directoryPath, "parked-vehicles.json")));
+            Assert.DoesNotContain("parked-vehicles", written, StringComparison.Ordinal);
 
             await repository.DeleteAsync(new("ready-orders"), CancellationToken.None);
-            Assert.DoesNotContain("ready-orders", await File.ReadAllTextAsync(path), StringComparison.Ordinal);
+            Assert.False(File.Exists(path));
+            Assert.True(File.Exists(Path.Combine(directoryPath, "parked-vehicles.json")));
         }
         finally
         {

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Drasi.Sentinel.Domain;
 using Microsoft.Data.Sqlite;
 
@@ -17,7 +18,8 @@ public static class SentinelDataDirectory
 public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDisposable
 {
     public const string FileName = "journal.sqlite";
-    public const string AuthoredQueriesFileName = "authored-queries.json";
+    public const string AuthoredQueriesDirectoryName = "authored-queries";
+    private const string LegacyAuthoredQueriesFileName = "authored-queries.json";
 
     private const string MigrationSql = """
         CREATE TABLE IF NOT EXISTS sentinel_conversation_tasks (
@@ -137,6 +139,44 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
         Add(command, "@owner", owner.Value);
         Add(command, "@task", taskId.Value);
         return await command.ExecuteScalarAsync(cancellationToken) is not null;
+    }
+
+    public async Task<IReadOnlyList<OwnerTaskSummary>> ListOwnerTasksAsync(OwnerId owner, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT t.task_id, t.state, s.subscription_id, s.state, s.query_id
+            FROM sentinel_conversation_tasks t
+            LEFT JOIN sentinel_subscriptions s
+                ON s.owner_id = t.owner_id AND s.task_id = t.task_id
+            WHERE t.owner_id = @owner
+            ORDER BY t.created_at;
+            """;
+        Add(command, "@owner", owner.Value);
+        var result = new List<OwnerTaskSummary>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            result.Add(new OwnerTaskSummary(
+                new(reader.GetString(0)),
+                Enum.Parse<ConversationTaskState>(reader.GetString(1)),
+                reader.IsDBNull(2) ? null : new SubscriptionId(Guid.Parse(reader.GetString(2))),
+                reader.IsDBNull(3) ? null : Enum.Parse<SubscriptionState>(reader.GetString(3)),
+                reader.IsDBNull(4) ? null : new QueryId(reader.GetString(4))));
+        }
+        return result;
+    }
+
+    public async Task<ConversationSubscription?> FindSubscriptionAsync(OwnerId owner, SubscriptionId subscriptionId, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = SubscriptionSelect + " WHERE owner_id=@owner AND subscription_id=@id";
+        Add(command, "@owner", owner.Value);
+        Add(command, "@id", subscriptionId.Value.ToString("D"));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadSubscription(reader) : null;
     }
 
     public async Task SetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, PushNotificationConfig config, CancellationToken cancellationToken)
@@ -436,30 +476,62 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
 
     private async Task PublishAuthoredQueriesAsync(CancellationToken cancellationToken)
     {
-        var directory = Path.GetDirectoryName(_path);
-        if (string.IsNullOrEmpty(directory))
+        var parent = Path.GetDirectoryName(_path);
+        if (string.IsNullOrEmpty(parent))
             return;
+        var directory = Path.Combine(parent, AuthoredQueriesDirectoryName);
+        Directory.CreateDirectory(directory);
         var queries = await ListAsync(cancellationToken);
-        var json = JsonSerializer.Serialize(
-            queries.Select(query => new
-            {
-                id = query.Id.Value,
-                description = query.Description,
-                cypher = query.Cypher,
-                sources = query.SourceIds,
-                joins = query.Joins.Select(join => new
+        var current = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var query in queries)
+        {
+            var destination = QueryFile(directory, query.Id.Value);
+            current.Add(query.Id.Value);
+            var json = JsonSerializer.Serialize(
+                new
                 {
-                    id = join.Id,
-                    keys = join.Keys.Select(key => new { label = key.Label, property = key.Property }),
-                }),
-                expiresAt = query.Expires.Instant,
-            }),
-            new JsonSerializerOptions { WriteIndented = true });
-        var destination = Path.Combine(directory, AuthoredQueriesFileName);
-        var temporary = destination + ".tmp";
-        await File.WriteAllTextAsync(temporary, json + Environment.NewLine, cancellationToken);
-        File.Move(temporary, destination, overwrite: true);
+                    id = query.Id.Value,
+                    description = query.Description,
+                    cypher = query.Cypher,
+                    sources = query.SourceIds,
+                    joins = query.Joins.Select(join => new
+                    {
+                        id = join.Id,
+                        keys = join.Keys.Select(key => new { label = key.Label, property = key.Property }),
+                    }),
+                    expiresAt = query.Expires.Instant,
+                },
+                new JsonSerializerOptions { WriteIndented = true });
+            var temporary = destination + ".tmp";
+            await File.WriteAllTextAsync(temporary, json + Environment.NewLine, cancellationToken);
+            File.Move(temporary, destination, overwrite: true);
+        }
+
+        foreach (var file in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            if (!current.Contains(Path.GetFileNameWithoutExtension(file)))
+                File.Delete(file);
+        }
+
+        var legacy = Path.Combine(parent, LegacyAuthoredQueriesFileName);
+        if (File.Exists(legacy))
+            File.Delete(legacy);
     }
+
+    private static string QueryFile(string directory, string id)
+    {
+        if (!QueryFileName.IsMatch(id))
+            throw new InvalidOperationException($"Query id '{id}' is not a file name.");
+        var path = Path.GetFullPath(Path.Combine(directory, id + ".json"));
+        var root = Path.GetFullPath(directory) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(root, StringComparison.Ordinal))
+            throw new InvalidOperationException($"Query id '{id}' is not a file name.");
+        return path;
+    }
+
+    private static readonly Regex QueryFileName = new(
+        "^[a-z][a-z0-9-]{1,63}$",
+        RegexOptions.CultureInvariant);
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {

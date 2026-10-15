@@ -71,6 +71,21 @@ public static class A2aEndpoint
                     repository,
                     context.RequestAborted);
             }
+            if (document.RootElement.TryGetProperty("method", out var taskMethod) &&
+                taskMethod.ValueKind == JsonValueKind.String &&
+                A2aTaskAdmin.IsMethod(taskMethod.GetString()))
+            {
+                Principal taskPrincipal;
+                try { taskPrincipal = A2aPrincipalFactory.Create(context.User, authentication); }
+                catch (A2aProtocolException exception) { return Error(requestId, -32001, exception.Message, exception.Code, StatusCodes.Status401Unauthorized); }
+                return await A2aTaskAdmin.HandleAsync(
+                    document.RootElement,
+                    requestId,
+                    taskPrincipal,
+                    repository,
+                    subscriptions,
+                    context.RequestAborted);
+            }
             request = A2aMessageRequest.Parse(document.RootElement);
         }
         catch (JsonException) { return Error(null, -32700, "The request body must be valid JSON."); }
@@ -79,7 +94,8 @@ public static class A2aEndpoint
         try { principal = A2aPrincipalFactory.Create(context.User, authentication); }
         catch (A2aProtocolException exception) { return Error(request.RequestId, -32001, exception.Message, exception.Code, StatusCodes.Status401Unauthorized); }
 
-        var taskId = new ConversationTaskId(request.Message.TaskId);
+        var taskId = await WatchTaskAsync(repository, principal, request, context.RequestAborted);
+        var resumeAfter = ResumeCursor(ResumeAfter(context), request.Message.TaskId, taskId.Value);
         try
         {
             if (request.Method == A2aStreamingMethod.SendMessage)
@@ -132,13 +148,34 @@ public static class A2aEndpoint
                 taskId,
                 subscriptions,
                 notifier,
-                ResumeAfter(context),
+                resumeAfter,
                 request.UsesInspectorV1);
         }
         catch (A2aAgentUnconfiguredException exception) { return Error(request.RequestId, -32003, exception.Message, "agent_unconfigured", StatusCodes.Status503ServiceUnavailable); }
         catch (AgentFailureException exception) when (exception.Failure == AgentFailure.CredentialUnavailable) { return Error(request.RequestId, -32003, exception.Message, "agent_credential_unavailable", StatusCodes.Status503ServiceUnavailable); }
         catch (AgentFailureException exception) when (exception.Failure == AgentFailure.ProviderUnavailable) { return Error(request.RequestId, -32003, exception.Message, "agent_provider_unavailable", StatusCodes.Status503ServiceUnavailable); }
         catch (SentinelException exception) { return Error(request.RequestId, -32002, exception.Message, exception.Code); }
+    }
+
+    private static async Task<ConversationTaskId> WatchTaskAsync(
+        IConversationRepository repository,
+        Principal principal,
+        A2aMessageRequest request,
+        CancellationToken cancellationToken)
+    {
+        var requested = new ConversationTaskId(request.Message.TaskId);
+        if (string.Equals(request.Message.TaskId, request.Message.MessageId, StringComparison.Ordinal) ||
+            !await repository.TaskExistsAsync(principal.Owner, requested, cancellationToken))
+        {
+            return requested;
+        }
+
+        var subscriptions = await repository.ListSubscriptionsAsync(principal.Owner, requested, cancellationToken);
+        var occupied = subscriptions.Any(subscription => subscription.State is
+            SubscriptionState.Arming or SubscriptionState.Active or SubscriptionState.Paused or SubscriptionState.Degraded);
+        return occupied && !WatchTurn.ContinuesOccupiedTask(request.Message.Text)
+            ? new ConversationTaskId(request.Message.MessageId)
+            : requested;
     }
 
     private static Task RememberCallerAsync(
@@ -169,6 +206,11 @@ public static class A2aEndpoint
 
     private static long ResumeAfter(HttpContext context) =>
         long.TryParse(context.Request.Headers["Last-Event-ID"], out var parsed) && parsed >= 0 ? parsed : 0;
+
+    internal static long ResumeCursor(long requestedCursor, string requestedTaskId, string resolvedTaskId) =>
+        string.Equals(requestedTaskId, resolvedTaskId, StringComparison.Ordinal) && requestedCursor >= 0
+            ? requestedCursor
+            : 0;
 
     private static async Task CompleteStreamingTurnAsync(
         Principal principal,

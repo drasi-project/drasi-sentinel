@@ -33,9 +33,11 @@ rows do not share a plate, so they do not satisfy the matched watch.
 
 ## Ask for each watch
 
-Start a new Inspector task for each prompt. One task watches one query. Click
-**Send streaming**. Wait until Inspector shows that the subscription is active
-before you start the next task.
+One task watches one query. Click **Send streaming**. A later watch request
+in the same Inspector session starts another task, and the first watch keeps
+its stream. A mapping answer such as `preparing` stays on the task that asked.
+Wait until Inspector shows that the subscription is active before you send the
+next watch.
 
 The script prints these prompts:
 
@@ -49,7 +51,7 @@ The script prints these prompts:
 
 The prompts describe the situation. They do not include Cypher. The agent
 reads the sources and builds the query. The committed definition is
-`data/authored-queries.json`.
+`data/authored-queries/<id>.json`.
 
 ## Drive a change
 
@@ -93,4 +95,5 @@ Press Ctrl+C to stop Sentinel, Inspector, and both database containers.
 To run the ready and matched prompts against the configured model and check
 the diffs, run `./e2e.sh` from this directory. That run also sends "Tell me
 when an order is ready and the customer is waiting." The reply must ask which
-available fields correspond. It must not subscribe.
+available fields correspond, and it must name every configured label, including
+labels the request did not use. It must not subscribe.

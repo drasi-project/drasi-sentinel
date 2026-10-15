@@ -14,7 +14,7 @@ service:
     authentication:
       mode: anonymous
   query_authoring:
-    enabled: true
+    enabled: false
 sources:
   - id: accounting-ledger
     kind: postgres
@@ -52,8 +52,6 @@ sources:
 queries:
   - id: invoice-paid
     description: Reports invoices that are paid.
-    examples:
-      - Tell me when an invoice is paid. Keep the watch for 7 days.
     cypher: >-
       MATCH (invoice:invoices)
       WHERE invoice.paid = true

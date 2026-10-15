@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Drasi.Sentinel.Domain;
 using Drasi.Sentinel.Host;
 
 namespace Drasi.Sentinel.Tests;
@@ -45,6 +46,55 @@ public sealed class SentinelManifestLoaderTests
                 """);
             var rejected = Assert.Throws<ManifestLoadException>(() => SentinelManifestLoader.Load(manifest));
             Assert.Contains("service.wal", rejected.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Load_allows_a_curated_query_without_examples()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var manifest = Path.Combine(directory, "sentinel.yaml");
+        File.WriteAllText(manifest, """
+            plugins:
+              - ref: source/postgres
+            service:
+              profile: demo
+              a2a:
+                authentication:
+                  mode: anonymous
+            sources:
+              - id: ledger
+                kind: postgres
+                config:
+                  host: 127.0.0.1
+            queries:
+              - id: omitted
+                description: Rows that match.
+                cypher: MATCH (n:Item) RETURN n.id AS id
+                sources: [ledger]
+                reactions: [notify]
+              - id: empty
+                description: Another match.
+                examples: []
+                cypher: MATCH (n:Item) RETURN n.id AS id
+                sources: [ledger]
+                reactions: [notify]
+            reactions:
+              - id: notify
+            """);
+
+        try
+        {
+            var loaded = SentinelManifestLoader.Load(manifest);
+            Assert.Empty(loaded.SafeCatalog.Queries[new QueryId("omitted")].Examples);
+            Assert.Empty(loaded.SafeCatalog.Queries[new QueryId("empty")].Examples);
         }
         finally
         {

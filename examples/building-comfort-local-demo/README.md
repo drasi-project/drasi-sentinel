@@ -4,7 +4,7 @@ This is the Sentinel version of the [Drasi building comfort tutorial](https://dr
 PostgreSQL holds one building, three floors, and nine rooms. Each room has
 temperature, humidity, and co2. The catalog starts with no queries. The agent
 authors one watch per task and reports changes as A2A artifacts. The
-committed query is `data/authored-queries.json`. There is no
+committed query is `data/authored-queries/<id>.json`. There is no
 dashboard reaction.
 
 PostgreSQL listens on `127.0.0.1:5732`. The Inspector listens on

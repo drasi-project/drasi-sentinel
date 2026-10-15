@@ -326,6 +326,99 @@ public sealed class QueryAuthoringEvalTests
             """;
         var covered = "MATCH (o:orders)-[:PLATE]->(v:vehicles) WHERE o.status = 'ready' AND v.location = 'Curbside' RETURN o.id";
         Assert.Empty(QueryWorkbench.UncoveredConditions(mapped, covered));
+        Assert.Empty(QueryWorkbench.UncoveredConditions(
+            """
+            Notify me when pickup is stuck.
+            still being prepared
+            preparing
+            """,
+            "MATCH (o:orders) WHERE o.status = 'preparing' RETURN o.id"));
+    }
+
+    [Fact]
+    public async Task An_unmapped_condition_keeps_every_configured_label_in_the_reply()
+    {
+        var sourceIds = new[] { "orders-db", "fleet-db" };
+        var runtime = new RecordingRuntime { ListedSourceIds = sourceIds };
+        runtime.Schemas["orders-db"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"id"},{"name":"status"},{"name":"plate"}]}],"relations":[]}""");
+        runtime.Schemas["fleet-db"] = JsonNode.Parse("""{"nodes":[{"label":"vehicles","properties":[{"name":"plate"},{"name":"location"}]}],"relations":[]}""");
+        runtime.LabelSamples["orders"] =
+        [
+            JsonNode.Parse("""{"id":"1","status":"preparing","plate":"A1234"}""")!,
+            JsonNode.Parse("""{"id":"2","status":"ready","plate":"F1000"}""")!,
+        ];
+        runtime.LabelSamples["vehicles"] =
+        [
+            JsonNode.Parse("""{"plate":"A1234","location":"Parking"}""")!,
+            JsonNode.Parse("""{"plate":"G2000","location":"Curbside"}""")!,
+        ];
+        var sources = sourceIds.ToHashSet(StringComparer.Ordinal);
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var store = new InMemoryAuthoredQueryStore();
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        var caller = "Tell me when an order is ready for pickup and the customer is waiting.";
+
+        var omitted = await workbench.IncludeOmittedLabelsAsync(
+            caller,
+            "I can track the order becoming ready, but waiting is not on the order.",
+            CancellationToken.None);
+        Assert.Contains("vehicles", omitted, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("location", omitted, StringComparison.OrdinalIgnoreCase);
+
+        var listed = await workbench.IncludeOmittedLabelsAsync(
+            caller,
+            "Labels: orders, vehicles. Which property should waiting use?",
+            CancellationToken.None);
+        Assert.Equal("Labels: orders, vehicles. Which property should waiting use?", listed);
+
+        var readyOnly = await workbench.IncludeOmittedLabelsAsync(
+            "Tell me when an order is ready.",
+            "How long should I keep the watch?",
+            CancellationToken.None);
+        Assert.Equal("How long should I keep the watch?", readyOnly);
+        var sample = QueryAuthoringEvalSupport.Workbench(
+            new RecordingRuntime(),
+            new InMemoryAuthoredQueryStore(),
+            new LiveCatalog(QueryAuthoringEvalSupport.Catalog()));
+        var unrelated = await sample.CoverageGapAsync("sample", "Watch the lot. Keep the watch for 1h.", CancellationToken.None);
+        Assert.Contains("does not match this request", unrelated);
+        Assert.Null(await sample.CoverageGapAsync("sample", "Show the sample.", CancellationToken.None));
+
+        await store.SaveAsync(new AuthoredQuery(
+            new QueryId("watch-bay"),
+            "A guessed watch.",
+            "MATCH (n:vehicles) RETURN n.plate AS plate",
+            ["fleet-db"],
+            [],
+            new Unbounded()), CancellationToken.None);
+        var unnamed = await workbench.CoverageGapAsync("watch-bay", "Watch the bay. Keep the watch for 1h.", CancellationToken.None);
+        Assert.Contains("uncovered words", unnamed);
+
+        Assert.False(await workbench.CommitDueAsync("Tell me when the customer is waiting.", CancellationToken.None));
+        Assert.True(await workbench.CommitDueAsync("Notify me when an order is preparing.", CancellationToken.None));
+        Assert.False(await workbench.CommitDueAsync("Cancel the parking watch.", CancellationToken.None));
+        Assert.True(await workbench.CommitDueAsync(caller + "\nCurbside", CancellationToken.None));
+        Assert.True(QueryWorkbench.GuessedComplementLiteral(
+            "Tell me when a widget is missing.",
+            "MATCH (n:orders) WHERE n.status = 'missing' RETURN n.id",
+            new Dictionary<string, IReadOnlyList<string>> { ["state"] = ["sealed"], ["status"] = ["open"] }));
+        Assert.False(QueryWorkbench.GuessedComplementLiteral(
+            "Tell me when a widget state is missing.",
+            "MATCH (n:widgets) WHERE n.state = 'missing' RETURN n.id",
+            new Dictionary<string, IReadOnlyList<string>> { ["state"] = ["sealed"], ["status"] = ["open"] }));
+        Assert.False(QueryWorkbench.GuessedComplementLiteral(
+            "Tell me when a widget is sealed.",
+            "MATCH (n:widgets) WHERE n.state = 'sealed' RETURN n.id",
+            new Dictionary<string, IReadOnlyList<string>> { ["state"] = ["sealed"], ["status"] = ["open"] }));
+
+        Assert.False(await workbench.MappingReadyAsync(caller, CancellationToken.None));
+        Assert.False(await workbench.MappingReadyAsync(caller + "\nvehicle location", CancellationToken.None));
+        Assert.True(await workbench.MappingReadyAsync(caller + "\nvehicle location\nCurbside", CancellationToken.None));
     }
 
     [Fact]

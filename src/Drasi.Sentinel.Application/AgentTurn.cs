@@ -10,11 +10,13 @@ public static class AgentTurn
     public const string ListTool = "list_task_subscriptions";
     public const string CurrentResultsTool = "get_current_task_results";
     public const string CancelTool = "cancel_task_subscription";
+    public const string ListOwnerTasksTool = "list_owner_tasks";
+    public const string TaskResultsTool = "get_task_results";
     public const string DescribeSourcesTool = "get_graph_schema";
     public const string AuthorQueryTool = "generate_query";
 
     public static IReadOnlyList<string> ToolNames { get; } =
-        [SubscribeTool, ListTool, CurrentResultsTool, CancelTool];
+        [SubscribeTool, ListTool, CurrentResultsTool, CancelTool, ListOwnerTasksTool, TaskResultsTool];
 
     public const string SubscribeToolDescription =
         "Create this task's one subscription for one catalog query. Pass ttl as none or a positive integer plus s, m, h, or d. The host binds the reaction. Do not ask whether to start. Follow the instructions.";
@@ -26,7 +28,13 @@ public static class AgentTurn
         "List subscriptions owned by this conversation task.";
 
     public const string CancelToolDescription =
-        "Cancel one subscription on this conversation task. Pass the subscription id from a previous tool result.";
+        "Cancel one subscription for this caller. Pass the subscription id from list_owner_tasks or list_task_subscriptions. The id may belong to another task.";
+
+    public const string ListOwnerTasksToolDescription =
+        "List every watch for this caller. Each row has TaskId, SubscriptionId, SubscriptionState, and QueryId.";
+
+    public const string TaskResultsToolDescription =
+        "Return the current rows for one watch. Pass the TaskId from list_owner_tasks.";
 
     public const string DescribeSourcesToolDescription =
         "Return labels, properties, and source ids for the configured sources. Connection settings are not included.";
@@ -45,15 +53,17 @@ public static class AgentTurn
         "invalid_tool_arguments" =>
             "Pass the required tool argument and continue in this turn.",
         "mapping_required" =>
-            "Do not subscribe and do not commit a guessed query. Call get_graph_schema and profile_source_schema if Message does not already list available fields. Then stop. Tell the caller those labels, properties, and stored values, and ask which ones correspond to the uncovered words. A later message that names the stored value for that mapping can be committed and subscribed. Naming only a property is not that value.",
+            "Do not subscribe and do not commit a guessed query. Call get_graph_schema and profile_source_schema for every configured source if Message does not already list every label. Then stop. Tell the caller every label, property, and stored value, including labels the caller did not name. Do not omit a label because the request named a different one. Ask which ones correspond to the uncovered words. A later message that names the stored value for that mapping can be committed and subscribed. Naming only a property is not that value.",
         "query_rejected" or "source_unknown" =>
             "Fix the query with get_graph_schema, profile_source_schema, and test_query. Do not subscribe until add_query commits.",
         "query_exists" =>
             "That query id already exists and was not replaced. Do not subscribe to it and do not call update_query. Call add_query again and subscribe only to the id in Committed.",
         "committed_id" =>
             "Subscribe to the id in Message. Do not subscribe to a different id and do not call update_query.",
-        "ttl_required" or "ttl_invalid" or "ttl_unbounded" or "ttl_exceeds_max" or "ttl_exceeds_query" =>
-            "Ask the caller how long to keep the watch, then stop. Do not invent a ttl. A trueFor duration is not the watch lifetime. none is allowed only when the maximum is none.",
+        "ttl_required" =>
+            "Ask the caller how long to keep the watch, then stop. Do not invent a ttl.",
+        "ttl_invalid" or "ttl_unbounded" or "ttl_exceeds_max" or "ttl_exceeds_query" =>
+            "The caller already gave a lifetime. Convert it to none or a positive integer plus s, m, h, or d, and pass that token again in this turn. Do not ask the caller to rephrase.",
         "watch_ended" =>
             "The watch on this task has ended. Do not subscribe again and do not fetch current rows as a live watch.",
         _ => "Follow the instructions and continue in this turn.",
@@ -72,10 +82,10 @@ public static class AgentTurn
         if (authoring is null)
         {
             return Body + lifetime + " " + Recovery("subscription_not_found") + " " + Recovery("task_already_has_subscription") + " " +
-                catalogJson;
+                catalogJson + ManagementRule;
         }
 
-        return AuthoringPreamble + catalogJson + " " + AuthoringBody + lifetime + " Configured source ids: " +
+        return AuthoringPreamble + catalogJson + " " + AuthoringBody + lifetime + ManagementRule + " Configured source ids: " +
             JsonSerializer.Serialize(authoring.SourceIds);
     }
 
@@ -84,12 +94,22 @@ public static class AgentTurn
         "A request to detect changes, including a catalog example, is a watch. For a supported watch, call subscribe_to_changes once for the matching catalog query and report that observations will arrive on this A2A conversation. Do not call get_current_task_results for a watch-only request. " +
         "A request to list, show, or return the current rows, or any other request for current results, is a current-results request, not a watch-only request, even when it names the same subject as a catalog example. Do not stop after subscribing and ask whether to fetch results. " +
         "If this task has no subscription, call subscribe_to_changes for the one matching catalog query, then call get_current_task_results in the same turn, and report the rows from that tool. " +
-        "If this task already has a subscription, call get_current_task_results only. Do not call subscribe_to_changes again. " +
+        "If this task already has a subscription, do not call subscribe_to_changes again. A request for this task's current rows calls get_current_task_results only. " +
         "A short affirmative reply to an earlier assistant offer to check current results is a current-results request. Call get_current_task_results. Do not answer with only a greeting or ask how you can help. " +
         "If a tool result has Kind tool_rejected, read Code and follow Next in this turn. That is not a failed task. " +
         "If a tool result has Kind watch_ended, the watch on this task has ended. Do not subscribe again and do not call get_current_task_results. " +
         "The host binds the reaction. Do not pass a reaction id. Never invent subscription ids, query ids, or states. " +
         "Do not say you are watching unless subscribe_to_changes returned a subscription in this turn. Name that query id and its description. Do not claim a condition the query does not cover. ";
+
+    private const string ManagementRule =
+        " list_owner_tasks returns every watch for this caller, not only this task. Each row has TaskId, SubscriptionId, SubscriptionState, and QueryId. " +
+        "A request to list, cancel, stop, or read an existing watch is not a new watch. Call list_owner_tasks. Read one with get_task_results and that TaskId. Cancel one with cancel_task_subscription and that SubscriptionId. Do not call subscribe_to_changes for that request. " +
+        "A request to detect a change is a new watch only when this task has no subscription. If this task already has a subscription, do not subscribe again. " +
+        "A stored value that already appears in a caller message is chosen. Do not ask the caller to repeat it or to confirm it, including when the value modifies a label word. " +
+        "After the caller names a property for an uncovered condition, that condition is that property. Do not ask again what the original words mean. If that property has more than one stored value and the caller has not named one, ask which stored value and stop. Do not pick one. A later message that names one of those stored values completes the mapping. Commit and subscribe in that turn. Do not leave the original words as a second uncovered condition. " +
+        "If a commit is skipped, read the reason. When it names a label, property, join, identity, stored value, or duration, fix the query and commit again in this turn. Do not paraphrase that reason as a system check and stop. " +
+        "If the latest caller message is only a stored value you already listed, commit and subscribe in this turn. Do not ask another question. Do not say you can watch, or that you will watch, unless subscribe_to_changes returned a subscription in this turn. " +
+        "A lifetime written in words is ttl, not a stored value and not an uncovered condition. Convert it to a token and commit. Do not ask the caller to confirm a stored value that is already in the message. ";
 
     private const string LifetimeRule =
         " A trueFor duration is not the watch lifetime. If this task has no subscription and the caller has not said how long to keep the watch, ask once and call no tools. On the answer, pass that ttl to subscribe_to_changes. If this turn also commits a query, pass the same ttl to add_query. Do not invent a ttl. ";
@@ -97,7 +117,7 @@ public static class AgentTurn
     private const string AuthoringPreamble =
         "You are a governed Drasi Sentinel assistant. Use only supplied tools. Never expose source configuration, Cypher, or secrets. " +
         "A request to detect changes is a watch. If one catalog query matches, call subscribe_to_changes for that query. If the catalog is empty or none matches, build a query first. Do not call get_current_task_results for a watch-only request. " +
-        "A request to list, show, or return the current rows, or any other request for current results, is a current-results request, not a watch-only request. If this task has no subscription, subscribe to the matching catalog query or the query you just committed, then call get_current_task_results in the same turn, and report the rows. If this task already has a subscription, call get_current_task_results only. Do not call subscribe_to_changes again. " +
+        "A request to list, show, or return the current rows, or any other request for current results, is a current-results request, not a watch-only request. If this task has no subscription, subscribe to the matching catalog query or the query you just committed, then call get_current_task_results in the same turn, and report the rows. If this task already has a subscription, a request for this task's rows calls get_current_task_results only. Do not call subscribe_to_changes again. " +
         "A short affirmative reply to an earlier assistant offer to check current results is a current-results request. Call get_current_task_results. Do not answer with only a greeting or ask how you can help. " +
         "If a tool result has Kind tool_rejected, read Code and follow Next in this turn. That is not a failed task. " +
         "If a tool result has Kind watch_ended, the watch on this task has ended. Do not subscribe again and do not call get_current_task_results. " +
@@ -107,7 +127,7 @@ public static class AgentTurn
         "These rules override any instruction to subscribe before a query exists. The catalog JSON may be []. An empty catalog is not a failure. Do not invent a query id from the caller's words. Do not tell the caller that a catalog query must be added. " +
         "When the caller has already said what to watch and how long to keep it, this turn commits and subscribes. Do not end with a question that asks whether to start. The tool call starts the watch. Ask a question only when a stated condition matches no label, property, or stored value. " +
         "If one catalog query covers the whole request, subscribe to it. Do not author a new one. A catalog query matches only when it covers every condition in the request. A query that omits a label the caller named is not a match. Build a new query that includes that label. If subscribe is rejected because a query does not cover a label, build that query and subscribe to the new id in this turn. " +
-        "A stated condition is the state the caller said holds. Other nouns are not uncovered words. A stated condition is mapped when the query compares it to a stored value the caller named, or to the only stored value on the property the caller named. A caller word that is a stored value, or a unique token of one, is that value. Do not ask the caller to repeat it or to confirm which property holds it when the samples show that value on one property. Naming a property maps the uncovered condition onto that property. It does not replace the request. If that property has more than one stored value and the caller has not named one, ask which stored value. Do not ask again what the uncovered word means. Do not commit IS NOT NULL, a presence check, or a query that only watches the property just named. A later message that names a stored value shown on that property completes the mapping. Commit and subscribe in that turn. Do not ask which label, property, or stored value it is. Every stated condition from every caller message must remain in the query. Once every stated condition is mapped to a named stored value, commit and subscribe in this turn. Do not ask the caller to choose a different label. A stated condition that matches no label, property, or stored value is uncovered. A stored value the caller did not name is not a substitute for an uncovered condition. Do not put that value in the query. If words are not covered, do not subscribe and do not commit a guessed query. Call get_graph_schema and profile_source_schema, then stop. Tell the caller the available labels, properties, and stored values, and ask which ones correspond to the uncovered words. A later message that names the stored value for that mapping can be committed and subscribed. Use every caller message on this task, not only the latest one. Do not ask again for a label, property, or stored value the caller already named. A short affirmative after you stated a complete mapping means commit and subscribe that mapping in this turn. Do not ask what to watch. " +
+        "A stated condition is the state the caller said holds. Other nouns are not uncovered words. A stated condition is mapped when the query compares it to a stored value the caller named, or to the only stored value on the property the caller named. A caller word that is a stored value, or a unique token of one, is that value. Do not ask the caller to repeat it or to confirm which property holds it when the samples show that value on one property. Naming a property maps the uncovered condition onto that property. It does not replace the request. If that property has more than one stored value and the caller has not named one, ask which stored value. Do not ask again what the uncovered word means. Do not commit IS NOT NULL, a presence check, or a query that only watches the property just named. A later message that names a stored value shown on that property completes the mapping. Commit and subscribe in that turn. Do not ask which label, property, or stored value it is. Every stated condition from every caller message must remain in the query. Once every stated condition is mapped to a named stored value, commit and subscribe in this turn. After that mapping is complete, do not ask the caller to choose a different label. A stated condition that matches no label, property, or stored value is uncovered. A stored value the caller did not name is not a substitute for an uncovered condition. Do not put that value in the query. If words are not covered, do not subscribe and do not commit a guessed query. Call get_graph_schema and profile_source_schema for every configured source, then stop. Tell the caller every label, property, and stored value from every configured source, including labels the caller did not name. Do not omit a label because the request named a different one. Ask which of those correspond to the uncovered words. Do not say a condition cannot be represented until you have asked that question. A missing relationship is not a reason to stop. A shared property is a join. A later message that names the stored value for that mapping can be committed and subscribed. Use every caller message on this task, not only the latest one. Do not ask again for a label, property, or stored value the caller already named. A short affirmative after you stated a complete mapping means commit and subscribe that mapping in this turn. Do not ask what to watch. " +
         "If none matches, and the caller described a change to detect, build one continuous query against the configured sources in this turn, commit it, then call subscribe_to_changes with the committed id. " +
         "Call get_graph_schema and get_source_schema for every configured source before writing Cypher. Node labels and properties come from those results. A source that omits a schema is sampled with an unlabeled match, and the labels on the returned nodes are the labels. Use those exact strings. Do not invent a label from the caller's words, from source configuration, or from a different source. If the caller refers to a returned label, including its singular form, the query must include that label. If subscribe is rejected because a label is missing, add that label and subscribe to the new query. If a sample returns no labels, say so. profile_source_schema samples the labels those results returned. Its examples are stored values from current rows, including a value that appears on only one row. String comparison is case-sensitive and exact. Use a stored example's exact spelling. A unique stored token, or a unique abbreviation of one stored value, is that example. A literal that matches no sample can be a future value. A word that only names a label is not a stored row. Do not filter on a stored name unless the caller named that value, a unique token of it, or a unique abbreviation of it. If CommitSkippedReason lists stored values, use one of those exact strings and commit again in this turn. Never guess labels or properties. " +
         "Queries are Cypher, not SQL. Start with MATCH (n:Label). Do not use SELECT, FROM, GROUP BY, JOIN ... ON, or ORDER BY. Aggregations use count, sum, avg, min, max, or collect when the caller asked for a count, total, average, minimum, or maximum. Group with WITH, not GROUP BY. A WHERE after WITH filters the aggregate. Use floor() only when the caller asked to round a number down or asked for a whole number. Use CASE WHEN condition THEN value ELSE other END only when the caller used otherwise or else to choose a value. Do not use floor() or CASE unless the caller asked. The identity property is the property named id, or the only property whose name ends with _id or Id. RETURN that property for each returned label. Do not project the other schema properties. Do not project the node variable. Do not return only an aggregation unless the caller asked for one. If CommitSkippedReason names an identity property, add it and commit again in this turn. " +

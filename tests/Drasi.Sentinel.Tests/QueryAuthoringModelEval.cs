@@ -223,6 +223,12 @@ public sealed class QueryAuthoringModelEval(ITestOutputHelper output)
             var events = await repository.ReadEventsAsync(principal.Owner, new(contextId), new(0), 100, timeout.Token);
             Assert.Contains(events, item => item.Kind == ConversationEventKind.CallerUtterance && item.Content == turns[index]);
             var subscriptionsOnTask = await repository.ListSubscriptionsAsync(principal.Owner, new(contextId), timeout.Token);
+            if (index == 0)
+            {
+                Assert.Contains("orders", reply, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("vehicles", reply, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("is active", reply, StringComparison.OrdinalIgnoreCase);
+            }
             if (index < 2)
                 Assert.Empty(subscriptionsOnTask);
             if (index == 1)

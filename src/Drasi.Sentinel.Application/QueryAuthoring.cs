@@ -332,6 +332,17 @@ public sealed class QueryAuthoring(
             }, Json);
         }
 
+        if (await OpenPropertyChoiceAsync(Optional(arguments, "caller_text"), cancellationToken) is { } propertyChoice)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = propertyChoice,
+                Hint = propertyChoice,
+            }, Json);
+        }
+
         if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
         {
             return JsonSerializer.Serialize(new
@@ -415,6 +426,8 @@ public sealed class QueryAuthoring(
             throw new SentinelException("query_rejected", "commit_as must be a lowercase id of letters, digits, and hyphens, and must not start with probe.");
         if (analysis.Blocking.Count > 0)
             return (string.Join(" | ", analysis.Blocking), null);
+        if (await OpenPropertyChoiceAsync(callerText, cancellationToken) is { } propertyChoice)
+            return (propertyChoice, null);
         if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
             return (joinSkip, null);
         if (analysis.UnknownLabels.Count > 0)
@@ -702,10 +715,16 @@ public sealed class QueryAuthoring(
                 continue;
             }
 
-            if (!IsNearMiss(literal, examples))
+            if (IsNearMiss(literal, examples))
+            {
+                problems.Add(
+                    $"'{literal}' is not a stored {label}.{property} value. Stored values: {string.Join(", ", examples)}. Use one of those exact strings.");
                 continue;
-            problems.Add(
-                $"'{literal}' is not a stored {label}.{property} value. Stored values: {string.Join(", ", examples)}. Use one of those exact strings.");
+            }
+
+            if (await GuessedComplementAsync(callerText, label, property, literal, cancellationToken))
+                problems.Add(
+                    $"'{literal}' is not a stored {label}.{property} value. These are uncovered words. Do not guess that mapping. Stored values: {string.Join(", ", examples)}.");
         }
 
         foreach (var label in variables.Values.Distinct(StringComparer.Ordinal))
@@ -723,7 +742,7 @@ public sealed class QueryAuthoring(
         }
 
         if (named.Count > 0)
-            problems.Add($"The caller named stored values missing from the query: {string.Join(", ", named)}. Filter with those exact strings.");
+            problems.Add($"The caller named stored values missing from the query: {string.Join(", ", named.Select(value => "'" + value + "'"))}. Filter with those exact strings.");
         return problems.Count == 0
             ? null
             : string.Join(" ", problems) + " Commit again with a stored value.";
@@ -877,6 +896,36 @@ public sealed class QueryAuthoring(
     private static string? StringValue(JsonNode node) =>
         node is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
+    private async Task<bool> GuessedComplementAsync(
+        string? callerText,
+        string label,
+        string property,
+        string literal,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return false;
+        var stored = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        var graph = await runtime.DescribeAsync(cancellationToken);
+        foreach (var node in graph.Nodes)
+        {
+            if (!Identifier.IsMatch(node.Label))
+                continue;
+            foreach (var pair in await SampleLabelAsync(node.Label, sourceIds.ToArray(), cancellationToken))
+            {
+                if (!stored.TryGetValue(pair.Key, out var existing))
+                    stored[pair.Key] = pair.Value;
+                else
+                    stored[pair.Key] = existing.Concat(pair.Value).Distinct(StringComparer.Ordinal).ToArray();
+            }
+        }
+
+        return QueryWorkbench.GuessedComplementLiteral(
+            callerText,
+            $"MATCH (n:{label}) WHERE n.{property} = '{literal}' RETURN n",
+            stored);
+    }
+
     private static bool IsNearMiss(string literal, IReadOnlyList<string> examples)
     {
         var tokens = Regex.Split(literal, "[^A-Za-z0-9]+")
@@ -902,7 +951,7 @@ public sealed class QueryAuthoring(
         var uncovered = QueryWorkbench.UncoveredConditions(callerText, query);
         if (uncovered.Length == 0)
             return null;
-        return $"The query does not cover {string.Join(", ", uncovered)}. These are uncovered words. Do not commit a guessed mapping. Ask which available labels, properties, or stored values correspond to them.";
+        return $"The query does not cover {string.Join(", ", uncovered)}. These are uncovered words. Do not commit a guessed mapping. Ask which available labels, properties, or stored values correspond to them. Include every configured label, including labels the caller did not name.";
     }
 
     private static string? DurationSkip(string query, string? callerText)
@@ -919,6 +968,47 @@ public sealed class QueryAuthoring(
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
             ? null
             : $"drasi.trueFor must use duration({{ {condition.Unit}: {condition.Amount} }}), the duration the caller asked for. Commit again in this turn.";
+    }
+
+    private async Task<string?> OpenPropertyChoiceAsync(string? callerText, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return null;
+        var lines = callerText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length < 2 || lines[^1].Length > 40)
+            return null;
+        var latest = lines[^1];
+        var stored = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        var graph = await runtime.DescribeAsync(cancellationToken);
+        foreach (var node in graph.Nodes)
+        {
+            if (!Identifier.IsMatch(node.Label))
+                continue;
+            foreach (var pair in await SampleLabelAsync(node.Label, sourceIds.ToArray(), cancellationToken))
+            {
+                if (!stored.TryGetValue(pair.Key, out var list))
+                    stored[pair.Key] = list = [];
+                foreach (var value in pair.Value)
+                {
+                    if (!list.Contains(value, StringComparer.Ordinal))
+                        list.Add(value);
+                }
+            }
+        }
+
+        var open = stored
+            .Where(pair => pair.Value.Count > 1 &&
+                Regex.IsMatch(latest, $@"\b{Regex.Escape(pair.Key)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+                !pair.Value.Any(value => Regex.IsMatch(latest, $@"\b{Regex.Escape(value)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+            .Select(pair => pair.Key + ": " + string.Join(", ", pair.Value))
+            .ToArray();
+        var values = stored.Values.SelectMany(item => item).ToArray();
+        var unmapped = QueryWorkbench.UncoveredConditions(string.Join('\n', lines[..^1]), "")
+            .Where(word => !values.Any(value => value.Equals(word, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        return open.Length == 0 || unmapped.Length == 0
+            ? null
+            : $"The caller named {string.Join("; ", open)} and has not chosen one stored value. These are uncovered words. Ask which stored value. Do not commit.";
     }
 
     private static string? JoinSkipReason(string query, IReadOnlyList<QueryJoinSpec> joins, QueryAnalysis analysis)

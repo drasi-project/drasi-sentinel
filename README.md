@@ -32,7 +32,7 @@ messages and protobuf-style text parts remain supported.
 
 The host stores conversation tasks, subscriptions, authored queries, and
 append-only task events in `data/journal.sqlite`. Each committed authored
-query is also written to `data/authored-queries.json`, with its id,
+query is also written to `data/authored-queries/<id>.json`, with its id,
 description, Cypher, sources, and joins. The agent does not repeat that
 Cypher on the task. The Drasi engine stores query
 indexes in RocksDB and plugin state in a redb file under the same `data/`

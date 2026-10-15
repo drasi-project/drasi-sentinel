@@ -12,6 +12,8 @@ public sealed record SubscribeToQuery(QueryId Query, SubscriptionRequestKey Requ
 public sealed record ListTaskSubscriptions : GovernedToolCall;
 public sealed record CancelTaskSubscription(SubscriptionId SubscriptionId) : GovernedToolCall;
 public sealed record GetCurrentTaskResults : GovernedToolCall;
+public sealed record ListOwnerTasks : GovernedToolCall;
+public sealed record GetOwnerTaskResults(ConversationTaskId TaskId) : GovernedToolCall;
 public sealed record CurrentTaskResultsArtifact(
     string Type,
     string TaskId,
@@ -24,7 +26,8 @@ public sealed record ToolResult(
     ConversationSubscription? Subscription = null,
     IReadOnlyList<ConversationSubscription>? Subscriptions = null,
     string? Message = null,
-    CurrentTaskResultsArtifact? Data = null);
+    CurrentTaskResultsArtifact? Data = null,
+    IReadOnlyList<OwnerTaskSummary>? Tasks = null);
 
 public interface IConversationSubscriptions
 {
@@ -245,8 +248,10 @@ public sealed class ConversationSubscriptions(
         {
             SubscribeToQuery subscribe => await SubscribeQueryAsync(principal, turn, subscribe, cancellationToken),
             ListTaskSubscriptions => new("subscriptions", Subscriptions: await repository.ListSubscriptionsAsync(principal.Owner, new(turn.TaskId), cancellationToken)),
+            ListOwnerTasks => new("tasks", Tasks: await repository.ListOwnerTasksAsync(principal.Owner, cancellationToken)),
             CancelTaskSubscription cancel => await CancelAsync(principal, turn, cancel.SubscriptionId, cancellationToken),
-            GetCurrentTaskResults => await GetCurrentResultsAsync(principal, turn, cancellationToken),
+            GetCurrentTaskResults => await GetCurrentResultsAsync(principal, new(turn.TaskId), cancellationToken),
+            GetOwnerTaskResults results => await GetCurrentResultsAsync(principal, results.TaskId, cancellationToken),
             _ => throw new SentinelException("unsupported_tool", "The requested tool is not available."),
         };
 
@@ -327,9 +332,10 @@ public sealed class ConversationSubscriptions(
 
     private async Task<ToolResult> CancelAsync(Principal principal, TaskTurnId turn, SubscriptionId id, CancellationToken cancellationToken)
     {
-        var taskId = new ConversationTaskId(turn.TaskId);
-        var subscription = await repository.GetSubscriptionAsync(principal.Owner, taskId, id, cancellationToken)
+        var subscription = await repository.GetSubscriptionAsync(principal.Owner, new(turn.TaskId), id, cancellationToken)
+            ?? await repository.FindSubscriptionAsync(principal.Owner, id, cancellationToken)
             ?? throw new SentinelException("subscription_not_found", "The subscription does not exist.");
+        var taskId = subscription.TaskId;
         if (subscription.State is not (SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired))
         {
             try
@@ -383,9 +389,8 @@ public sealed class ConversationSubscriptions(
         }
     }
 
-    private async Task<ToolResult> GetCurrentResultsAsync(Principal principal, TaskTurnId turn, CancellationToken cancellationToken)
+    private async Task<ToolResult> GetCurrentResultsAsync(Principal principal, ConversationTaskId taskId, CancellationToken cancellationToken)
     {
-        var taskId = new ConversationTaskId(turn.TaskId);
         var subscription = (await repository.ListSubscriptionsAsync(principal.Owner, taskId, cancellationToken)).SingleOrDefault()
             ?? throw new SentinelException("subscription_not_found", "The task does not have a subscription.");
         if (subscription.State is SubscriptionState.Cancelled or SubscriptionState.Revoked or SubscriptionState.Expired

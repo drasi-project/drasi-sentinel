@@ -8,9 +8,18 @@ public interface ISentinelRepository : IConversationRepository, IAuthoredQuerySt
     Task InitializeAsync(CancellationToken cancellationToken);
 }
 
+public sealed record OwnerTaskSummary(
+    ConversationTaskId TaskId,
+    ConversationTaskState State,
+    SubscriptionId? SubscriptionId,
+    SubscriptionState? SubscriptionState,
+    QueryId? QueryId);
+
 public interface IConversationRepository
 {
     Task<ConversationTask> GetOrCreateTaskAsync(Principal principal, ConversationTaskId taskId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<OwnerTaskSummary>> ListOwnerTasksAsync(OwnerId owner, CancellationToken cancellationToken);
+    Task<ConversationSubscription?> FindSubscriptionAsync(OwnerId owner, SubscriptionId subscriptionId, CancellationToken cancellationToken);
     Task<ConversationSubscription> GetOrCreateSubscriptionAsync(ConversationSubscription subscription, CancellationToken cancellationToken);
     Task<ConversationSubscription?> GetSubscriptionAsync(OwnerId owner, ConversationTaskId taskId, SubscriptionId subscriptionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<ConversationSubscription>> ListSubscriptionsAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken);
@@ -209,6 +218,32 @@ public sealed class InMemorySentinelRepository : IConversationRepository
 
     public Task<bool> TaskExistsAsync(OwnerId owner, ConversationTaskId taskId, CancellationToken cancellationToken) =>
         Task.FromResult(_tasks.ContainsKey((owner, taskId)));
+
+    public Task<IReadOnlyList<OwnerTaskSummary>> ListOwnerTasksAsync(OwnerId owner, CancellationToken cancellationToken)
+    {
+        var tasks = _tasks
+            .Where(item => item.Key.Owner == owner)
+            .Select(item => item.Value)
+            .OrderBy(task => task.CreatedAt)
+            .Select(task =>
+            {
+                var subscription = _subscriptions.Values
+                    .Where(item => item.Owner == owner && item.TaskId == task.Id)
+                    .OrderByDescending(item => item.CreatedAt)
+                    .FirstOrDefault();
+                return new OwnerTaskSummary(
+                    task.Id,
+                    task.State,
+                    subscription?.Id,
+                    subscription?.State,
+                    subscription?.Request.QueryId);
+            })
+            .ToArray();
+        return Task.FromResult<IReadOnlyList<OwnerTaskSummary>>(tasks);
+    }
+
+    public Task<ConversationSubscription?> FindSubscriptionAsync(OwnerId owner, SubscriptionId subscriptionId, CancellationToken cancellationToken) =>
+        Task.FromResult(_subscriptions.TryGetValue(subscriptionId, out var subscription) && subscription.Owner == owner ? subscription : null);
 
     public Task SetPushConfigAsync(OwnerId owner, ConversationTaskId taskId, PushNotificationConfig config, CancellationToken cancellationToken)
     {

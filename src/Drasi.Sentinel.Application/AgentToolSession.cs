@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Drasi.Sentinel.Domain;
 
 namespace Drasi.Sentinel.Application;
@@ -78,6 +79,8 @@ public sealed class AgentToolSession : IAgentTools
             new(AgentTurn.ListTool, AgentTurn.ListToolDescription, (string?)null),
             new(AgentTurn.CurrentResultsTool, AgentTurn.CurrentResultsToolDescription, (string?)null),
             new(AgentTurn.CancelTool, AgentTurn.CancelToolDescription, "id"),
+            new(AgentTurn.ListOwnerTasksTool, AgentTurn.ListOwnerTasksToolDescription, (string?)null),
+            new(AgentTurn.TaskResultsTool, AgentTurn.TaskResultsToolDescription, "task"),
         };
         if (workbench is not null)
             tools.AddRange(workbench.Tools);
@@ -86,6 +89,10 @@ public sealed class AgentToolSession : IAgentTools
     }
 
     public IReadOnlyList<AgentTool> Tools { get; }
+
+    public bool Subscribed { get; private set; }
+
+    public string? CorrectableSkip { get; private set; }
 
     public static AgentToolSession Create(
         IConversationSubscriptions commands,
@@ -111,6 +118,10 @@ public sealed class AgentToolSession : IAgentTools
             AgentTurn.CancelTool => Argument(arguments, "id") is { } id
                 ? CancelAsync(id)
                 : Task.FromResult(Rejected("invalid_tool_arguments", "Pass the subscription id.")),
+            AgentTurn.ListOwnerTasksTool => InvokeAsync(new ListOwnerTasks()),
+            AgentTurn.TaskResultsTool => Argument(arguments, "task") is { } task
+                ? InvokeAsync(new GetOwnerTaskResults(new ConversationTaskId(task)))
+                : Task.FromResult(Rejected("invalid_tool_arguments", "Pass the task id.")),
             _ when _workbench?.Tools.Any(tool => tool.Name == name) == true => WorkbenchAsync(name, arguments),
             _ => Task.FromResult(Rejected("invalid_tool_arguments", "The tool name is not valid.")),
         };
@@ -135,10 +146,13 @@ public sealed class AgentToolSession : IAgentTools
         if (_workbench is not null && !string.IsNullOrWhiteSpace(_callerText) &&
             await _workbench.CoverageGapAsync(query, _callerText, _cancellationToken) is { } gap)
             return Rejected(gap.Contains("uncovered words", StringComparison.Ordinal) ? "mapping_required" : "query_rejected", gap);
-        return await InvokeAsync(new SubscribeToQuery(
+        var accepted = await InvokeAsync(new SubscribeToQuery(
             new QueryId(query),
             new SubscriptionRequestKey($"a2a:{_turn.TaskId}:{_turn.MessageId}:request"),
             expires));
+        if (AcceptedSubscription(accepted))
+            Subscribed = true;
+        return accepted;
     }
 
     private async Task<string> WorkbenchAsync(string name, IReadOnlyDictionary<string, string?>? arguments)
@@ -148,8 +162,7 @@ public sealed class AgentToolSession : IAgentTools
         try
         {
             var result = await _workbench.InvokeAsync(name, WithCallerText(name, arguments), _cancellationToken, _grantedAt);
-            if (CommittedQueryId(result) is { } id)
-                _committedQueryId = id;
+            NoteCommit(result);
             return result;
         }
         catch (SentinelException exception) when (IsRecoverable(exception))
@@ -189,6 +202,64 @@ public sealed class AgentToolSession : IAgentTools
         var copy = new Dictionary<string, string?>(arguments ?? new Dictionary<string, string?>(), StringComparer.Ordinal);
         copy["caller_text"] = _callerText;
         return copy;
+    }
+
+    private void NoteCommit(string json)
+    {
+        if (CommittedQueryId(json) is { } id)
+        {
+            _committedQueryId = id;
+            CorrectableSkip = null;
+            return;
+        }
+
+        var skipped = SkippedReason(json);
+        if (skipped is null || skipped.Contains("uncovered words", StringComparison.OrdinalIgnoreCase))
+        {
+            CorrectableSkip = null;
+            return;
+        }
+
+        var quoted = Regex.Matches(skipped, "'([^']+)'")
+            .Select(match => match.Groups[1].Value)
+            .Where(value => value.Length > 0)
+            .ToArray();
+        CorrectableSkip = quoted.Length > 0 &&
+            quoted.All(value => _callerText?.Contains(value, StringComparison.OrdinalIgnoreCase) == true)
+            ? skipped
+            : null;
+    }
+
+    private static string? SkippedReason(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("CommitSkippedReason", out var reason) &&
+                reason.ValueKind == JsonValueKind.String
+                ? reason.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool AcceptedSubscription(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("Kind", out var kind) &&
+                kind.GetString() != AgentTurn.ToolRejectedKind &&
+                document.RootElement.TryGetProperty("Subscription", out var subscription) &&
+                subscription.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string? CommittedQueryId(string json)
@@ -238,6 +309,14 @@ public sealed class AgentToolSession : IAgentTools
         Subscription = result.Subscription is null ? null : View(result.Subscription),
         Subscriptions = result.Subscriptions?.Select(View).ToArray(),
         result.Message,
+        Tasks = result.Tasks?.Select(task => new
+        {
+            TaskId = task.TaskId.Value,
+            TaskState = task.State.ToString(),
+            SubscriptionId = task.SubscriptionId?.Value,
+            SubscriptionState = task.SubscriptionState?.ToString(),
+            QueryId = task.QueryId?.Value,
+        }).ToArray(),
         Data = result.Data is null ? null : new
         {
             result.Data.Type,

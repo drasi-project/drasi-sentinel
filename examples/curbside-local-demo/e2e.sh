@@ -275,7 +275,7 @@ rm -f "$CONNECTION" "$DEMO_LOG" \
 	"$EXAMPLE_DIR/data/journal.sqlite-shm" \
 	"$EXAMPLE_DIR/data/authored-queries.json" \
 	"$EXAMPLE_DIR/data/state.redb"
-rm -rf "$EXAMPLE_DIR/data/indexes"
+rm -rf "$EXAMPLE_DIR/data/indexes" "$EXAMPLE_DIR/data/authored-queries"
 "$EXAMPLE_DIR/demo.sh" >"$DEMO_LOG" 2>&1 &
 demo_pid=$!
 wait_for_host || { cat "$DEMO_LOG" >&2; fail "Sentinel did not become ready."; }

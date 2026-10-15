@@ -745,7 +745,7 @@ public static class SentinelManifestLoader
                 "examples");
             var description = RequiredScalar(entry.Configuration, "description", $"queries.{entry.Id}");
             var cypher = RequiredScalar(entry.Configuration, "cypher", $"queries.{entry.Id}");
-            var examples = StringList(entry.Configuration, $"queries.{entry.Id}", "examples");
+            var examples = OptionalStringList(entry.Configuration, $"queries.{entry.Id}", "examples");
             var sourceIds = StringList(entry.Configuration, $"queries.{entry.Id}", "sources", "source_ids");
             var allowedReactions = StringList(entry.Configuration, $"queries.{entry.Id}", "reactions", "allowed_reactions")
                 .Select(value => new ReactionId(value))

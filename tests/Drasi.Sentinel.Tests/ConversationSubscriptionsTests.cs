@@ -49,9 +49,15 @@ public sealed class ConversationSubscriptionsTests
         var service = new ConversationSubscriptions(Catalog(), engine, repository, notifier, TimeProvider.System);
         var principal = Principal();
         var created = await service.InvokeAsync(principal, new("task-1", "message-1"), new SubscribeToQuery(new("query"), new("one"), new Unbounded()), CancellationToken.None);
-        var cancelled = await service.InvokeAsync(principal, new("task-1", "message-2"), new CancelTaskSubscription(created.Subscription!.Id), CancellationToken.None);
+        var other = await service.InvokeAsync(principal, new("task-2", "message-2"), new SubscribeToQuery(new("query"), new("two"), new Unbounded()), CancellationToken.None);
+        var cancelled = await service.InvokeAsync(principal, new("task-2", "message-3"), new CancelTaskSubscription(created.Subscription!.Id), CancellationToken.None);
         Assert.Equal(SubscriptionState.Cancelled, cancelled.Subscription!.State);
-        await Assert.ThrowsAsync<SentinelException>(() => service.InvokeAsync(principal, new("other-task", "message-3"), new CancelTaskSubscription(created.Subscription.Id), CancellationToken.None));
+        Assert.Equal("task-1", cancelled.Subscription.TaskId.Value);
+        Assert.Equal(SubscriptionState.Active, other.Subscription!.State);
+        var otherOwner = new Principal(new("tenant"), new("other-owner"));
+        var denied = await Assert.ThrowsAsync<SentinelException>(() => service.InvokeAsync(
+            otherOwner, new("task-2", "message-4"), new CancelTaskSubscription(other.Subscription.Id), CancellationToken.None));
+        Assert.Equal("subscription_not_found", denied.Code);
     }
 
     [Fact]

@@ -1,0 +1,6 @@
+ts	phase	decision	why	evidence	result
+2026-10-14T22:14:30Z	frame	treat a later watch as a new task without a phrase list	varied wording cannot live in the host regex	src/Drasi.Sentinel.Host/A2aEndpoint.cs	open
+2026-10-14T23:49:42Z	route	split an occupied task on any new detection request	a phrase list misses later wording	src/Drasi.Sentinel.Host/WatchTurn.cs	unit tests passed
+2026-10-14T23:49:42Z	consumer	added ListTasks GetTask and CancelTask	a consumer must see every watch, not only the open task	src/Drasi.Sentinel.Host/A2aTaskAdmin.cs	unit tests passed
+2026-10-14T23:49:42Z	eval	ran 30 model sessions against gpt-5.4-mini	the user asked for a model-hitting eval, not a fixture-only check	/tmp/watch-eval-final.log	26 passed 4 failed
+2026-10-14T23:49:42Z	gate	reverted a coverage change that cleared real unmapped words	two existing tests failed	tests/Drasi.Sentinel.Tests/QueryAuthoringEvalTests.cs	tests restored

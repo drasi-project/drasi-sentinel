@@ -67,7 +67,7 @@ The model committed two queries, subscribed to the wrong id, or did not subscrib
 
 The host stored a query the watch should not contain. That is not an instruction bug. Add a fixture that rejects it. Then add one sentence in `AuthoringBody` that repeats the new `CommitSkippedReason` text. Do not add an instruction the host will not enforce. The next turn can ignore that sentence and still commit.
 
-Run the fixture script again. Then run the model eval once. A pass on this prompt is not a pass on every demo. After it passes, send one prompt from `examples/curbside-local-demo/prompts.sh` or `examples/building-comfort-local-demo/prompts.sh`. Read the committed query in that example's `data/authored-queries.json`.
+Run the fixture script again. Then run the model eval once. A pass on this prompt is not a pass on every demo. After it passes, send one prompt from `examples/curbside-local-demo/prompts.sh` or `examples/building-comfort-local-demo/prompts.sh`. Read the committed query in that example's `data/authored-queries/` directory.
 
 ## Add a scored prompt
 

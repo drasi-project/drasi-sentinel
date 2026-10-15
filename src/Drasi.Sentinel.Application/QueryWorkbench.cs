@@ -17,6 +17,12 @@ public interface IQueryWorkbench
         DateTimeOffset? grantedAt = null);
 
     Task<string?> CoverageGapAsync(string queryId, string callerText, CancellationToken cancellationToken);
+
+    Task<string> IncludeOmittedLabelsAsync(string callerText, string reply, CancellationToken cancellationToken);
+
+    Task<bool> MappingReadyAsync(string callerText, CancellationToken cancellationToken);
+
+    Task<bool> CommitDueAsync(string callerText, CancellationToken cancellationToken);
 }
 
 public sealed class QueryWorkbench(
@@ -83,6 +89,8 @@ public sealed class QueryWorkbench(
             ?? (item is null ? null : item.Description + " " + string.Join(" ", item.Examples));
         if (covered is null)
             return null;
+        if (authored is null && item is not null && !CatalogTextMatches(callerText, item))
+            return $"Query '{queryId}' does not match this request. These are uncovered words. Do not subscribe to it. Ask which labels, properties, or stored values correspond to the request.";
         var labels = (await SchemaLabelsAsync(cancellationToken))
             .Where(label => Mentions(callerText, label))
             .ToArray();
@@ -104,11 +112,190 @@ public sealed class QueryWorkbench(
             " ",
             new[] { covered, authored?.Description, item?.Description, item is null ? null : string.Join(" ", item.Examples) }
                 .Where(part => !string.IsNullOrWhiteSpace(part)));
+        var stored = await StoredByPropertyAsync(cancellationToken);
         var uncovered = UncoveredConditions(callerText, covered);
-        if (uncovered.Length == 0)
+        if (uncovered.Length == 0 &&
+            !GuessedComplementLiteral(callerText, covered, stored) &&
+            (authored is null || await RequestNamesSchemaAsync(callerText, stored, cancellationToken)))
             return null;
-        return $"Query '{queryId}' does not cover {string.Join(", ", uncovered)}. Do not subscribe and do not guess a mapping. Available fields: {await AvailableFieldsAsync(cancellationToken)}. Ask which of those labels, properties, or stored values correspond to the uncovered words.";
+        var words = uncovered.Length == 0 ? "that literal" : string.Join(", ", uncovered);
+        return $"Query '{queryId}' does not cover {words}. These are uncovered words. Do not subscribe and do not guess a mapping. Available fields: {await AvailableFieldsAsync(cancellationToken)}. Ask which of those labels, properties, or stored values correspond to the uncovered words. Name every label, including labels the caller did not use.";
     }
+
+    public async Task<string> IncludeOmittedLabelsAsync(string callerText, string reply, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(reply) || string.IsNullOrWhiteSpace(callerText))
+            return reply;
+        var labels = await SchemaLabelsAsync(cancellationToken);
+        if (labels.Count < 2)
+            return reply;
+        var omitted = labels.Where(label => !Mentions(reply, label)).ToArray();
+        if (omitted.Length == 0)
+            return reply;
+        var complements = IsComplements(callerText);
+        if (complements.Length == 0)
+            return reply;
+        var properties = await PropertyNamesAsync(cancellationToken);
+        var stored = await StoredValuesAsync(labels, cancellationToken);
+        var unmapped = complements.Where(word =>
+            !labels.Any(label => word.Equals(label, StringComparison.OrdinalIgnoreCase) || Mentions(word, label)) &&
+            !properties.Contains(word, StringComparer.OrdinalIgnoreCase) &&
+            !MatchesStored(word, stored)).ToArray();
+        if (unmapped.Length == 0)
+            return reply;
+        var fields = await AvailableFieldsAsync(cancellationToken);
+        if (!reply.Contains('?'))
+            return reply.TrimEnd() + " Available labels and properties: " + fields + ". Which of those corresponds to the unmapped condition?";
+        return reply.TrimEnd() + " Available labels and properties: " + fields + ".";
+    }
+
+    public async Task<bool> MappingReadyAsync(string callerText, CancellationToken cancellationToken)
+    {
+        var lines = callerText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length < 2)
+            return false;
+        var latest = lines[^1];
+        if (latest.Length > 40 || Regex.IsMatch(latest, @"\b(when|whenever|tell|watch|notify|keep)\b", RegexOptions.IgnoreCase))
+            return false;
+        var properties = await PropertyNamesAsync(cancellationToken);
+        var stored = await StoredByPropertyAsync(cancellationToken);
+        var earlier = string.Join('\n', lines[..^1]);
+        return properties.Any(property =>
+            Regex.IsMatch(earlier, $@"\b{Regex.Escape(property)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+            stored.TryGetValue(property, out var values) &&
+            values.Any(value => WholeWord(latest, value)));
+    }
+
+    public async Task<bool> CommitDueAsync(string callerText, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return false;
+        var lines = callerText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0 || IsManagement(lines[^1]))
+            return false;
+        if (await MappingReadyAsync(callerText, cancellationToken))
+            return true;
+        var stored = await StoredByPropertyAsync(cancellationToken);
+        var values = stored.Values.SelectMany(item => item).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (values.Length == 0)
+            return false;
+        var latest = lines[^1];
+        var earlier = string.Join('\n', lines[..^1]);
+        if (lines.Length >= 2 &&
+            latest.Length <= 40 &&
+            values.Count(value => WholeWord(latest, value)) == 1 &&
+            IsComplements(earlier).Any(word => !MatchesStored(word, values)))
+            return true;
+        if (IsComplements(callerText).Any(word => !MatchesStored(word, values)))
+            return false;
+        return values.Any(value => WholeWord(callerText, value));
+    }
+
+    internal static bool UnboundComplementLiteral(string callerText, string property, string literal) =>
+        !string.IsNullOrWhiteSpace(callerText) &&
+        IsComplements(callerText).Any(word => word.Equals(literal, StringComparison.OrdinalIgnoreCase)) &&
+        !Regex.IsMatch(callerText, $@"\b{Regex.Escape(property)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    internal static bool GuessedComplementLiteral(
+        string callerText,
+        string query,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> storedByProperty)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return false;
+        if (IsComplements(callerText).Length == 0)
+            return false;
+        var labels = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match node in Regex.Matches(
+            query,
+            @"\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_]*)",
+            RegexOptions.CultureInvariant))
+            labels[node.Groups[1].Value] = node.Groups[2].Value;
+        foreach (Match match in Regex.Matches(
+            query,
+            @"\b([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*=\s*'([^']*)'",
+            RegexOptions.CultureInvariant))
+        {
+            var variable = match.Groups[1].Value;
+            var property = match.Groups[2].Value;
+            var literal = match.Groups[3].Value;
+            if (!labels.TryGetValue(variable, out var label) || Mentions(callerText, label))
+                continue;
+            if (!UnboundComplementLiteral(callerText, property, literal))
+                continue;
+            if (storedByProperty.TryGetValue(property, out var examples) &&
+                examples.Contains(literal, StringComparer.Ordinal))
+                continue;
+            if (storedByProperty.Any(pair =>
+                pair.Value.Count > 0 &&
+                !pair.Key.Equals(property, StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> RequestNamesSchemaAsync(
+        string callerText,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> stored,
+        CancellationToken cancellationToken)
+    {
+        if ((await SchemaLabelsAsync(cancellationToken)).Any(label => Mentions(callerText, label)))
+            return true;
+        if ((await PropertyNamesAsync(cancellationToken)).Any(property => WholeWord(callerText, property)))
+            return true;
+        return stored.Values.SelectMany(values => values).Any(value => WholeWord(callerText, value));
+    }
+
+    private static bool WholeWord(string text, string value) =>
+        Regex.IsMatch(text, $@"\b{Regex.Escape(value)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool IsManagement(string text) =>
+        Regex.IsMatch(
+            text,
+            @"\b(?:cancel|stop|pause|resume|list|show|rows|results|subscription|subscriptions|tasks|watches)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
+        !Regex.IsMatch(
+            text,
+            @"\b(?:when|whenever|once|until|while|if)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static bool CatalogTextMatches(string callerText, QueryCatalogItem item)
+    {
+        if (item.Examples.Any(example =>
+            callerText.Contains(example, StringComparison.OrdinalIgnoreCase) ||
+            (callerText.Length >= 12 && example.Contains(callerText, StringComparison.OrdinalIgnoreCase))))
+            return true;
+        var callerTokens = ContentTokens(callerText);
+        var catalogTokens = ContentTokens(item.Description + " " + string.Join(" ", item.Examples));
+        return catalogTokens.Overlaps(callerTokens);
+    }
+
+    private static HashSet<string> ContentTokens(string text) =>
+        Regex.Matches(text, "[A-Za-z]{4,}")
+            .Select(match => match.Value.ToLowerInvariant())
+            .Where(token => !Stopwords.Contains(token) && token is not ("show" or "tell" or "notify" or "alert"))
+            .ToHashSet(StringComparer.Ordinal);
+
+    private static string[] IsComplements(string callerText)
+    {
+        var words = new List<string>();
+        foreach (Match match in Regex.Matches(
+            callerText,
+            @"\b([A-Za-z]{4,})\s+is\s+(?:still\s+)?(?:being\s+)?([A-Za-z]{4,})\b|\b(?:been|being)\s+([A-Za-z]{4,})\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
+            if (!Stopwords.Contains(complement))
+                words.Add(complement);
+        }
+
+        return words.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static bool MatchesStored(string word, IReadOnlyList<string> values) =>
+        values.Any(value => value.Equals(word, StringComparison.OrdinalIgnoreCase)) ||
+        (word.Length >= 4 && values.Count(value => value.Contains(word, StringComparison.OrdinalIgnoreCase)) == 1);
 
     private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -145,7 +332,9 @@ public sealed class QueryWorkbench(
             pending.Add((subject, complement));
         }
 
-        if (pending.Count == 1 && NamedEqualityCovers(callerText, covered))
+        if (pending.Count == 1 && NamedEqualityCovers(callerText, covered, pending[0].Complement))
+            pending.Clear();
+        else if (pending.Count > 0 && UnmappedMatches(callerText, covered) == 1 && ExtraCallerLiteral(callerText, covered))
             pending.Clear();
 
         var gaps = new List<string>();
@@ -159,7 +348,7 @@ public sealed class QueryWorkbench(
         return gaps.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static bool NamedEqualityCovers(string callerText, string covered)
+    private static bool NamedEqualityCovers(string callerText, string covered, string complement)
     {
         foreach (Match filter in Regex.Matches(
             covered,
@@ -168,8 +357,63 @@ public sealed class QueryWorkbench(
         {
             var property = filter.Groups[1].Value;
             var literal = filter.Groups[2].Value;
+            if (literal.Equals(complement, StringComparison.OrdinalIgnoreCase))
+                continue;
             if (Regex.IsMatch(callerText, $@"\b{Regex.Escape(property)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
                 Regex.IsMatch(callerText, $@"\b{Regex.Escape(literal)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static int UnmappedMatches(string callerText, string covered)
+    {
+        var tokens = Regex.Matches(covered, "[A-Za-z]{4,}")
+            .Select(match => match.Value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var count = 0;
+        foreach (Match match in Regex.Matches(
+            callerText,
+            @"\b([A-Za-z]{4,})\s+is\s+(?:still\s+)?(?:being\s+)?([A-Za-z]{4,})\b|\b(?:been|being)\s+([A-Za-z]{4,})\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
+            if (!Stopwords.Contains(complement) && !Covers(tokens, complement))
+                count++;
+        }
+
+        return count;
+    }
+
+    private static bool ExtraCallerLiteral(string callerText, string covered)
+    {
+        var tokens = Regex.Matches(covered, "[A-Za-z]{4,}")
+            .Select(match => match.Value.ToLowerInvariant())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (Match literal in Regex.Matches(covered, "'([^']+)'"))
+        {
+            var value = literal.Groups[1].Value;
+            if (!callerText.Contains(value, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (Covers(tokens, value) && !IsComplementOfCoveredMatch(callerText, tokens, value))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsComplementOfCoveredMatch(string callerText, IReadOnlyList<string> tokens, string value)
+    {
+        foreach (Match match in Regex.Matches(
+            callerText,
+            @"\b([A-Za-z]{4,})\s+is\s+(?:still\s+)?(?:being\s+)?([A-Za-z]{4,})\b|\b(?:been|being)\s+([A-Za-z]{4,})\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
+            if (complement.Equals(value, StringComparison.OrdinalIgnoreCase) && Covers(tokens, complement))
                 return true;
         }
 
@@ -576,6 +820,69 @@ public sealed class QueryWorkbench(
         arguments is not null && arguments.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value)
             ? value
             : null;
+
+    private async Task<IReadOnlyList<string>> PropertyNamesAsync(CancellationToken cancellationToken)
+    {
+        var names = new List<string>();
+        foreach (var id in sourceIds.OrderBy(item => item, StringComparer.Ordinal))
+        {
+            var schema = await runtime.SourceSchemaAsync(id, cancellationToken);
+            if (schema?["nodes"] is not JsonArray nodes)
+                continue;
+            foreach (var node in nodes)
+                names.AddRange(PropertyNames(node?["properties"] as JsonArray));
+        }
+
+        return names.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private async Task<IReadOnlyList<string>> StoredValuesAsync(IReadOnlyList<string> labels, CancellationToken cancellationToken)
+    {
+        if (labels.Count == 0)
+            return [];
+        var stored = await StoredByPropertyAsync(cancellationToken);
+        return stored.Values.SelectMany(values => values).ToArray();
+    }
+
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<string>>> StoredByPropertyAsync(CancellationToken cancellationToken)
+    {
+        var values = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var id in sourceIds.OrderBy(item => item, StringComparer.Ordinal))
+        {
+            var schema = await runtime.SourceSchemaAsync(id, cancellationToken);
+            if (schema?["nodes"] is not JsonArray nodes)
+                continue;
+            foreach (var node in nodes)
+            {
+                var label = node?["label"]?.GetValue<string>();
+                if (string.IsNullOrWhiteSpace(label) || !Identifier.IsMatch(label))
+                    continue;
+                var probe = await runtime.ProbeAsync(
+                    $"MATCH (n:{label}) RETURN n",
+                    [id],
+                    [],
+                    TimeSpan.FromSeconds(5),
+                    cancellationToken);
+                if (!probe.Ok)
+                    continue;
+                foreach (var examples in QuerySamples.Examples(probe.Rows))
+                {
+                    if (!values.TryGetValue(examples.Key, out var list))
+                        values[examples.Key] = list = [];
+                    foreach (var example in examples.Value)
+                    {
+                        if (example is JsonValue value &&
+                            value.TryGetValue<string>(out var text) &&
+                            text.Length > 0 &&
+                            !list.Contains(text, StringComparer.Ordinal))
+                            list.Add(text);
+                    }
+                }
+            }
+        }
+
+        return values.ToDictionary(item => item.Key, item => (IReadOnlyList<string>)item.Value, StringComparer.OrdinalIgnoreCase);
+    }
 
     private async Task<IReadOnlyList<string>> SchemaLabelsAsync(CancellationToken cancellationToken)
     {
