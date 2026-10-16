@@ -94,6 +94,8 @@ public sealed class AgentToolSession : IAgentTools
 
     public string? CorrectableSkip { get; private set; }
 
+    public string? NarrowerQuery { get; private set; }
+
     public static AgentToolSession Create(
         IConversationSubscriptions commands,
         Principal principal,
@@ -145,13 +147,20 @@ public sealed class AgentToolSession : IAgentTools
             return Rejected("committed_id", $"Subscribe to '{_committedQueryId}'. Do not subscribe to '{query}'.");
         if (_workbench is not null && !string.IsNullOrWhiteSpace(_callerText) &&
             await _workbench.CoverageGapAsync(query, _callerText, _cancellationToken) is { } gap)
+        {
+            if (gap.Contains("narrower than this request", StringComparison.Ordinal))
+                NarrowerQuery = gap + " Do not subscribe to '" + query + "'.";
             return Rejected(gap.Contains("uncovered words", StringComparison.Ordinal) ? "mapping_required" : "query_rejected", gap);
+        }
         var accepted = await InvokeAsync(new SubscribeToQuery(
             new QueryId(query),
             new SubscriptionRequestKey($"a2a:{_turn.TaskId}:{_turn.MessageId}:request"),
             expires));
         if (AcceptedSubscription(accepted))
+        {
             Subscribed = true;
+            NarrowerQuery = null;
+        }
         return accepted;
     }
 

@@ -99,7 +99,6 @@ public sealed class QueryAuthoringModelEval(ITestOutputHelper output)
             JsonNode.Parse("""{"plate":"A1234","location":"Parking"}""")!,
             JsonNode.Parse("""{"plate":"G2000","location":"Curbside"}""")!,
         ];
-
         var store = new InMemoryAuthoredQueryStore();
         var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
         var repository = new InMemorySentinelRepository();
@@ -317,7 +316,7 @@ public sealed class QueryAuthoringModelEval(ITestOutputHelper output)
         throw new TimeoutException("The A2A turn did not store an assistant reply.");
     }
 
-    private static (CatalogAgentResponder Responder, InMemorySentinelRepository Repository, InMemoryAuthoredQueryStore Store, IConversationSubscriptions Subscriptions) PropertyMappingHarness(string endpoint, string model)
+    private static (CatalogAgentResponder Responder, InMemorySentinelRepository Repository, InMemoryAuthoredQueryStore Store, IConversationSubscriptions Subscriptions) PropertyMappingHarness(string endpoint, string model, AuthoredQuery? seed = null)
     {
         var sourceIds = new[] { "orders-db", "fleet-db" };
         var runtime = new RecordingRuntime
@@ -346,6 +345,11 @@ public sealed class QueryAuthoringModelEval(ITestOutputHelper output)
         ];
         var store = new InMemoryAuthoredQueryStore();
         var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        if (seed is not null)
+        {
+            store.SaveAsync(seed, CancellationToken.None).GetAwaiter().GetResult();
+            catalog.Add(QueryAuthoring.ToCatalogItem(seed, new ReactionId("notify")));
+        }
         var repository = new InMemorySentinelRepository();
         var engine = new FakeNativeEngine();
         engine.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -364,6 +368,250 @@ public sealed class QueryAuthoringModelEval(ITestOutputHelper output)
             workbench,
             new QueryAuthoringPrompt(sourceIds));
         return (responder, repository, store, subscriptions);
+    }
+
+    [Fact(Timeout = 480_000)]
+    public async Task Configured_model_does_not_reuse_a_stricter_authored_query()
+    {
+        if (Environment.GetEnvironmentVariable("SENTINEL_QUERY_EVAL") != "1")
+        {
+            output.WriteLine("Skipped. Set SENTINEL_QUERY_EVAL=1 to call AZURE_OPENAI_MODEL.");
+            return;
+        }
+
+        var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT");
+        var model = Environment.GetEnvironmentVariable("AZURE_OPENAI_MODEL");
+        Assert.False(string.IsNullOrWhiteSpace(endpoint));
+        Assert.False(string.IsNullOrWhiteSpace(model));
+        output.WriteLine($"Calling model {model} for a narrower request than a saved query.");
+
+        var stricter = new AuthoredQuery(
+            new QueryId("order-pickup-waiting"),
+            "Detect when an order is ready for pickup and the customer is waiting at curbside.",
+            "MATCH (o:orders)-[:LINK]->(v:vehicles) WHERE o.status = 'ready' AND v.location = 'Curbside' RETURN o.id AS id",
+            ["orders-db", "fleet-db"],
+            [new QueryJoinSpec("LINK", [new QueryJoinKeySpec("orders", "plate"), new QueryJoinKeySpec("vehicles", "plate")])],
+            new Unbounded());
+        var (responder, repository, store, subscriptions) = PropertyMappingHarness(endpoint!, model!, stricter);
+        var principal = A2aPrincipalFactory.Create(new ClaimsPrincipal(), new A2aAnonymousManifest());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(8));
+        await PostStreamingAsync(
+            InspectorMessage("ready-only", "Tell me when a pickup order is ready for pickup. Keep the watch for 7 days.", null),
+            repository,
+            subscriptions,
+            responder);
+        var reply = await WaitForReplyAsync(repository, principal, new("ready-only"), 0, timeout.Token);
+        output.WriteLine(reply);
+        var active = Assert.Single(await repository.ListSubscriptionsAsync(principal.Owner, new("ready-only"), CancellationToken.None));
+        Assert.NotEqual("order-pickup-waiting", active.Request.QueryId.Value);
+        var committed = await store.FindAsync(active.Request.QueryId, CancellationToken.None);
+        Assert.NotNull(committed);
+        Assert.Contains("ready", committed!.Cypher, StringComparison.Ordinal);
+        Assert.DoesNotContain("Curbside", committed.Cypher, StringComparison.Ordinal);
+        output.WriteLine(committed.Cypher);
+    }
+
+    [Fact(Timeout = 720_000)]
+    public async Task Configured_model_runs_two_sessions_at_the_same_time()
+    {
+        if (Environment.GetEnvironmentVariable("SENTINEL_QUERY_EVAL") != "1")
+        {
+            output.WriteLine("Skipped. Set SENTINEL_QUERY_EVAL=1 to call AZURE_OPENAI_MODEL.");
+            return;
+        }
+
+        var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT");
+        var model = Environment.GetEnvironmentVariable("AZURE_OPENAI_MODEL");
+        Assert.False(string.IsNullOrWhiteSpace(endpoint));
+        Assert.False(string.IsNullOrWhiteSpace(model));
+        output.WriteLine($"Calling model {model} for two overlapping sessions.");
+
+        var stricter = new AuthoredQuery(
+            new QueryId("order-pickup-waiting"),
+            "Detect when an order is ready for pickup and the customer is waiting at curbside.",
+            "MATCH (o:orders)-[:LINK]->(v:vehicles) WHERE o.status = 'ready' AND v.location = 'Curbside' RETURN o.id AS id",
+            ["orders-db", "fleet-db"],
+            [new QueryJoinSpec("LINK", [new QueryJoinKeySpec("orders", "plate"), new QueryJoinKeySpec("vehicles", "plate")])],
+            new Unbounded());
+        var (responder, repository, store, subscriptions) = PropertyMappingHarness(endpoint!, model!, stricter);
+        var principal = A2aPrincipalFactory.Create(new ClaimsPrincipal(), new A2aAnonymousManifest());
+        await repository.GetOrCreateTaskAsync(principal, new("session-a"), CancellationToken.None);
+        await repository.GetOrCreateSubscriptionAsync(new ConversationSubscription(
+            new(Guid.NewGuid()),
+            new("session-a"),
+            principal.Tenant,
+            principal.Owner,
+            new(stricter.Id, new("notify"), new("session-a:request")),
+            SubscriptionState.Active,
+            new("reaction-a"),
+            DateTimeOffset.UtcNow,
+            new Unbounded()), CancellationToken.None);
+        await repository.AppendEventAsync(
+            principal.Owner,
+            new ConversationEvent(new("session-a"), default, ConversationEventKind.Observation, null, "diff-from-session-a", DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(12));
+        var ready = PostStreamingAsync(
+            InspectorMessage("session-b", "Tell me when a pickup order is ready for pickup. Keep the watch for 7 days.", null),
+            repository,
+            subscriptions,
+            responder);
+        var curb = PostStreamingAsync(
+            InspectorMessage("session-c", "Tell me when a pickup vehicle is at the curb. Keep the watch for 7 days.", null),
+            repository,
+            subscriptions,
+            responder);
+        await Task.WhenAll(ready, curb);
+        var readyReply = await WaitForReplyAsync(repository, principal, new("session-b"), 0, timeout.Token);
+        var curbReply = await WaitForReplyAsync(repository, principal, new("session-c"), 0, timeout.Token);
+        output.WriteLine("ready: " + readyReply);
+        output.WriteLine("curb: " + curbReply);
+
+        var owner = await repository.ListOwnerTasksAsync(principal.Owner, CancellationToken.None);
+        Assert.Equal("order-pickup-waiting", owner.Single(task => task.TaskId.Value == "session-a").QueryId?.Value);
+        Assert.Equal(SubscriptionState.Active, owner.Single(task => task.TaskId.Value == "session-a").SubscriptionState);
+        var readyWatch = Assert.Single(await repository.ListSubscriptionsAsync(principal.Owner, new("session-b"), CancellationToken.None));
+        var curbWatch = Assert.Single(await repository.ListSubscriptionsAsync(principal.Owner, new("session-c"), CancellationToken.None));
+        Assert.NotEqual("order-pickup-waiting", readyWatch.Request.QueryId.Value);
+        Assert.NotEqual("order-pickup-waiting", curbWatch.Request.QueryId.Value);
+        Assert.NotEqual(readyWatch.Request.QueryId, curbWatch.Request.QueryId);
+        var readyQuery = await store.FindAsync(readyWatch.Request.QueryId, CancellationToken.None);
+        var curbQuery = await store.FindAsync(curbWatch.Request.QueryId, CancellationToken.None);
+        Assert.NotNull(readyQuery);
+        Assert.NotNull(curbQuery);
+        Assert.Contains("ready", readyQuery!.Cypher, StringComparison.Ordinal);
+        Assert.DoesNotContain("Curbside", readyQuery.Cypher, StringComparison.Ordinal);
+        Assert.DoesNotContain("'ready'", curbQuery!.Cypher, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Curbside", curbQuery.Cypher, StringComparison.Ordinal);
+        var readyEvents = await repository.ReadEventsAsync(principal.Owner, new("session-b"), new(0), 40, CancellationToken.None);
+        var curbEvents = await repository.ReadEventsAsync(principal.Owner, new("session-c"), new(0), 40, CancellationToken.None);
+        Assert.DoesNotContain(readyEvents, item => item.Content.Contains("diff-from-session-a", StringComparison.Ordinal));
+        Assert.DoesNotContain(curbEvents, item => item.Content.Contains("diff-from-session-a", StringComparison.Ordinal));
+        output.WriteLine(readyQuery.Cypher);
+        output.WriteLine(curbQuery.Cypher);
+    }
+
+    [Fact(Timeout = 900_000)]
+    public async Task Configured_model_uses_a_named_shared_property_as_the_join()
+    {
+        if (Environment.GetEnvironmentVariable("SENTINEL_QUERY_EVAL") != "1")
+        {
+            output.WriteLine("Skipped. Set SENTINEL_QUERY_EVAL=1 to call AZURE_OPENAI_MODEL.");
+            return;
+        }
+
+        var endpoint = Environment.GetEnvironmentVariable("AZURE_OPENAI_ENDPOINT");
+        var model = Environment.GetEnvironmentVariable("AZURE_OPENAI_MODEL");
+        Assert.False(string.IsNullOrWhiteSpace(endpoint), "AZURE_OPENAI_ENDPOINT is required when SENTINEL_QUERY_EVAL=1.");
+        Assert.False(string.IsNullOrWhiteSpace(model), "AZURE_OPENAI_MODEL is required when SENTINEL_QUERY_EVAL=1.");
+        output.WriteLine($"Calling model {model} for a named shared property join.");
+
+        var (responder, repository, store, subscriptions) = SharedPropertyHarness(endpoint!, model!);
+        var principal = A2aPrincipalFactory.Create(new ClaimsPrincipal(), new A2aAnonymousManifest());
+        var turns = new[]
+        {
+            "Tell me when an order is ready for pickup and the customer is waiting. Keep the watch for 1h.",
+            "vehicle location",
+            "curbside",
+            "ok",
+            "the vehicle license plate",
+        };
+        var replies = new List<string>();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(14));
+        string? contextId = null;
+        for (var index = 0; index < turns.Length; index++)
+        {
+            var messageId = $"join-{index + 1}";
+            var before = contextId is null
+                ? 0
+                : (await repository.ReadEventsAsync(principal.Owner, new(contextId), new(0), 100, timeout.Token))
+                    .Count(item => item.Kind == ConversationEventKind.AssistantArtifact);
+            await PostStreamingAsync(InspectorMessage(messageId, turns[index], contextId), repository, subscriptions, responder);
+            contextId ??= messageId;
+            var reply = await WaitForReplyAsync(repository, principal, new(contextId), before, timeout.Token);
+            replies.Add(reply);
+            output.WriteLine($"Turn {index}: {turns[index]}");
+            output.WriteLine(reply);
+            var active = await repository.ListSubscriptionsAsync(principal.Owner, new(contextId), timeout.Token);
+            if (index < turns.Length - 1)
+                Assert.Empty(active);
+            if (index == 1)
+            {
+                Assert.Contains("location", reply, StringComparison.OrdinalIgnoreCase);
+                Assert.Contains("?", reply, StringComparison.Ordinal);
+            }
+        }
+
+        Assert.Contains(replies.Take(4), reply =>
+            reply.Contains("plate", StringComparison.OrdinalIgnoreCase) &&
+            reply.Contains("customer_name", StringComparison.OrdinalIgnoreCase));
+        var plateReply = replies[^1];
+        foreach (var sample in new[] { "A1234", "F1000", "G2000", "C9876", "B5678" })
+            Assert.DoesNotContain(sample, plateReply, StringComparison.Ordinal);
+
+        var activeWatch = Assert.Single(await repository.ListSubscriptionsAsync(principal.Owner, new(contextId!), CancellationToken.None));
+        var query = await store.FindAsync(activeWatch.Request.QueryId, CancellationToken.None);
+        Assert.NotNull(query);
+        Assert.Contains("ready", query!.Cypher, StringComparison.Ordinal);
+        Assert.Contains("Curbside", query.Cypher, StringComparison.Ordinal);
+        Assert.Contains("location", query.Cypher, StringComparison.Ordinal);
+        var join = Assert.Single(query.Joins);
+        Assert.Contains(join.Keys, key => key.Label == "orders" && key.Property == "plate");
+        Assert.Contains(join.Keys, key => key.Label == "vehicles" && key.Property == "plate");
+        Assert.Contains(join.Id, query.Cypher, StringComparison.Ordinal);
+        foreach (var sample in new[] { "A1234", "F1000", "G2000", "C9876", "B5678" })
+            Assert.DoesNotContain(sample, query.Cypher, StringComparison.Ordinal);
+        output.WriteLine(query.Cypher);
+    }
+
+    private static (CatalogAgentResponder Responder, InMemorySentinelRepository Repository, InMemoryAuthoredQueryStore Store, IConversationSubscriptions Subscriptions) SharedPropertyHarness(string endpoint, string model)
+    {
+        var sourceIds = new[] { "orders-db", "fleet-db" };
+        var runtime = new RecordingRuntime
+        {
+            Graph = new SourceGraph(
+                [
+                    new GraphNode("orders", [new GraphProperty("id", "string"), new GraphProperty("status", "string"), new GraphProperty("plate", "string"), new GraphProperty("customer_name", "string"), new GraphProperty("driver_name", "string")], ["orders-db"]),
+                    new GraphNode("vehicles", [new GraphProperty("plate", "string"), new GraphProperty("location", "string"), new GraphProperty("customer_name", "string"), new GraphProperty("driver_name", "string")], ["fleet-db"]),
+                ],
+                [],
+                []),
+            ListedSourceIds = sourceIds,
+        };
+        runtime.Schemas["orders-db"] = JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"id"},{"name":"status"},{"name":"plate"},{"name":"customer_name"},{"name":"driver_name"}]}],"relations":[]}""");
+        runtime.Schemas["fleet-db"] = JsonNode.Parse("""{"nodes":[{"label":"vehicles","properties":[{"name":"plate"},{"name":"location"},{"name":"customer_name"},{"name":"driver_name"}]}],"relations":[]}""");
+        runtime.LabelSamples["orders"] =
+        [
+            JsonNode.Parse("""{"id":"1","status":"preparing","plate":"A1234","customer_name":"Ada","driver_name":"Lee"}""")!,
+            JsonNode.Parse("""{"id":"2","status":"ready","plate":"F1000","customer_name":"Noah","driver_name":"Kim"}""")!,
+        ];
+        runtime.LabelSamples["vehicles"] =
+        [
+            JsonNode.Parse("""{"plate":"C9876","location":"Parking","customer_name":"Ada","driver_name":"Lee"}""")!,
+            JsonNode.Parse("""{"plate":"B5678","location":"Parking","customer_name":"Noah","driver_name":"Kim"}""")!,
+            JsonNode.Parse("""{"plate":"G2000","location":"Curbside","customer_name":"Maya","driver_name":"Oz"}""")!,
+        ];
+        var store = new InMemoryAuthoredQueryStore();
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var repository = new InMemorySentinelRepository();
+        var engine = new FakeNativeEngine();
+        engine.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var sources = sourceIds.ToHashSet(StringComparer.Ordinal);
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        var taskSubscriptions = new ConversationSubscriptions(catalog.Catalog, engine, repository, new TaskEventNotifier(), TimeProvider.System);
+        var responder = new CatalogAgentResponder(
+            catalog.Catalog,
+            taskSubscriptions,
+            MafLanguageModel.Create(new Uri(endpoint), model, ModelCredentialKind.AzureCli),
+            workbench,
+            new QueryAuthoringPrompt(sourceIds));
+        return (responder, repository, store, taskSubscriptions);
     }
 
     private static bool AsksAgain(string reply) =>

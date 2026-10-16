@@ -234,12 +234,13 @@ public sealed class QueryAuthoring(
             ? await SampledLiteralSkipAsync(query, sources, callerText, cancellationToken)
             : null;
         var projectionSkip = ProjectionSkip(query, graph);
+        var joinCommitSkip = await JoinCommitSkipAsync(query, joins, callerText, graph, cancellationToken);
         string? skipped = null;
         string? committed = null;
         if (commitAs is not null)
         {
             var commit = await TryCommitAsync(
-                commitAs, description, query, sources, joins, analysis, probe, callerText, literalSkip, projectionSkip, Optional(arguments, "ttl"), grantedAt, cancellationToken);
+                commitAs, description, query, sources, joins, analysis, probe, callerText, literalSkip, projectionSkip, joinCommitSkip, Optional(arguments, "ttl"), grantedAt, cancellationToken);
             skipped = commit.Skipped;
             committed = commit.Committed;
         }
@@ -343,6 +344,17 @@ public sealed class QueryAuthoring(
             }, Json);
         }
 
+        if (await JoinCommitSkipAsync(query, joins, Optional(arguments, "caller_text"), graph, cancellationToken) is { } joinCommitSkip)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                Kind = "query_attempt",
+                Query = query,
+                CommitSkippedReason = joinCommitSkip,
+                Hint = joinCommitSkip,
+            }, Json);
+        }
+
         if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
         {
             return JsonSerializer.Serialize(new
@@ -418,6 +430,7 @@ public sealed class QueryAuthoring(
         string? callerText,
         string? literalSkip,
         string? projectionSkip,
+        string? joinCommitSkip,
         string? ttl,
         DateTimeOffset? grantedAt,
         CancellationToken cancellationToken)
@@ -428,6 +441,8 @@ public sealed class QueryAuthoring(
             return (string.Join(" | ", analysis.Blocking), null);
         if (await OpenPropertyChoiceAsync(callerText, cancellationToken) is { } propertyChoice)
             return (propertyChoice, null);
+        if (joinCommitSkip is not null)
+            return (joinCommitSkip, null);
         if (JoinSkipReason(query, joins, analysis) is { } joinSkip)
             return (joinSkip, null);
         if (analysis.UnknownLabels.Count > 0)
@@ -970,6 +985,38 @@ public sealed class QueryAuthoring(
             : $"drasi.trueFor must use duration({{ {condition.Unit}: {condition.Amount} }}), the duration the caller asked for. Commit again in this turn.";
     }
 
+    private async Task<string?> JoinCommitSkipAsync(
+        string query,
+        IReadOnlyList<QueryJoinSpec> joins,
+        string? callerText,
+        SourceGraph graph,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(callerText))
+            return null;
+        var stored = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in graph.Nodes)
+        {
+            if (!Identifier.IsMatch(node.Label))
+                continue;
+            foreach (var pair in await SampleLabelAsync(node.Label, sourceIds.ToArray(), cancellationToken))
+            {
+                if (!stored.TryGetValue(pair.Key, out var existing))
+                    stored[pair.Key] = pair.Value;
+                else
+                    stored[pair.Key] = existing.Concat(pair.Value).Distinct(StringComparer.Ordinal).ToArray();
+            }
+        }
+
+        return JoinKeys.CommitSkip(
+            callerText,
+            query,
+            joins,
+            QueryWorkbench.ComplementWords(callerText),
+            graph.Nodes,
+            stored);
+    }
+
     private async Task<string?> OpenPropertyChoiceAsync(string? callerText, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(callerText))
@@ -996,10 +1043,17 @@ public sealed class QueryAuthoring(
             }
         }
 
+        var storedReadOnly = stored.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<string>)pair.Value,
+            StringComparer.OrdinalIgnoreCase);
+        var follow = JoinKeys.FollowUp(callerText, QueryWorkbench.ComplementWords(callerText), graph.Nodes, storedReadOnly);
         var open = stored
             .Where(pair => pair.Value.Count > 1 &&
-                Regex.IsMatch(latest, $@"\b{Regex.Escape(pair.Key)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
-                !pair.Value.Any(value => Regex.IsMatch(latest, $@"\b{Regex.Escape(value)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)))
+                JoinKeys.Names(latest, pair.Key) &&
+                !pair.Value.Any(value => Regex.IsMatch(latest, $@"\b{Regex.Escape(value)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)) &&
+                !pair.Key.Equals(follow.Key, StringComparison.OrdinalIgnoreCase) &&
+                !follow.Choices.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
             .Select(pair => pair.Key + ": " + string.Join(", ", pair.Value))
             .ToArray();
         var values = stored.Values.SelectMany(item => item).ToArray();

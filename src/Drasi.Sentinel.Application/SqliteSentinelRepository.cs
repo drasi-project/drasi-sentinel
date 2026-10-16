@@ -3,6 +3,8 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Drasi.Sentinel.Domain;
 using Microsoft.Data.Sqlite;
+using YamlDotNet.Core;
+using YamlDotNet.Serialization;
 
 namespace Drasi.Sentinel.Application;
 
@@ -487,27 +489,15 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
         {
             var destination = QueryFile(directory, query.Id.Value);
             current.Add(query.Id.Value);
-            var json = JsonSerializer.Serialize(
-                new
-                {
-                    id = query.Id.Value,
-                    description = query.Description,
-                    cypher = query.Cypher,
-                    sources = query.SourceIds,
-                    joins = query.Joins.Select(join => new
-                    {
-                        id = join.Id,
-                        keys = join.Keys.Select(key => new { label = key.Label, property = key.Property }),
-                    }),
-                    expiresAt = query.Expires.Instant,
-                },
-                new JsonSerializerOptions { WriteIndented = true });
+            var yaml = QueryYaml.Serialize(query);
             var temporary = destination + ".tmp";
-            await File.WriteAllTextAsync(temporary, json + Environment.NewLine, cancellationToken);
+            await File.WriteAllTextAsync(temporary, yaml, cancellationToken);
             File.Move(temporary, destination, overwrite: true);
         }
 
         foreach (var file in Directory.EnumerateFiles(directory, "*.json"))
+            File.Delete(file);
+        foreach (var file in Directory.EnumerateFiles(directory, "*.yaml"))
         {
             if (!current.Contains(Path.GetFileNameWithoutExtension(file)))
                 File.Delete(file);
@@ -522,7 +512,7 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
     {
         if (!QueryFileName.IsMatch(id))
             throw new InvalidOperationException($"Query id '{id}' is not a file name.");
-        var path = Path.GetFullPath(Path.Combine(directory, id + ".json"));
+        var path = Path.GetFullPath(Path.Combine(directory, id + ".yaml"));
         var root = Path.GetFullPath(directory) + Path.DirectorySeparatorChar;
         if (!path.StartsWith(root, StringComparison.Ordinal))
             throw new InvalidOperationException($"Query id '{id}' is not a file name.");
@@ -532,6 +522,56 @@ public sealed class SqliteSentinelRepository : ISentinelRepository, IAsyncDispos
     private static readonly Regex QueryFileName = new(
         "^[a-z][a-z0-9-]{1,63}$",
         RegexOptions.CultureInvariant);
+
+    private static class QueryYaml
+    {
+        private static readonly ISerializer Serializer = new SerializerBuilder()
+            .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
+            .Build();
+
+        public static string Serialize(AuthoredQuery query)
+        {
+            var document = new PublishedQuery
+            {
+                id = query.Id.Value,
+                description = query.Description,
+                cypher = query.Cypher,
+                sources = query.SourceIds.ToArray(),
+                joins = query.Joins.Select(join => new PublishedJoin
+                {
+                    id = join.Id,
+                    keys = join.Keys.Select(key => new PublishedKey { label = key.Label, property = key.Property }).ToArray(),
+                }).ToArray(),
+                expiresAt = query.Expires.Instant?.ToString("o", CultureInfo.InvariantCulture),
+            };
+            return Serializer.Serialize(document);
+        }
+
+        private sealed class PublishedQuery
+        {
+            public string id { get; set; } = "";
+            public string description { get; set; } = "";
+
+            [YamlMember(ScalarStyle = ScalarStyle.Literal)]
+            public string cypher { get; set; } = "";
+
+            public string[] sources { get; set; } = [];
+            public PublishedJoin[] joins { get; set; } = [];
+            public string? expiresAt { get; set; }
+        }
+
+        private sealed class PublishedJoin
+        {
+            public string id { get; set; } = "";
+            public PublishedKey[] keys { get; set; } = [];
+        }
+
+        private sealed class PublishedKey
+        {
+            public string label { get; set; } = "";
+            public string property { get; set; } = "";
+        }
+    }
 
     private async Task<SqliteConnection> OpenAsync(CancellationToken cancellationToken)
     {

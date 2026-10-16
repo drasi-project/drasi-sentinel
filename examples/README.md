@@ -22,7 +22,7 @@ provide query, source, Cypher, or filter identifiers.
 
 Each running example writes its journal, Drasi index, state, and WAL files under
 `data/` next to that example's `sentinel.yaml`. Queries the agent commits are
-in `data/authored-queries/`, one JSON file per query. Two examples do not
+in `data/authored-queries/`, one YAML file per query. Two examples do not
 share those files. Set `service.data` to move them.
 
 Set `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` before running a host.

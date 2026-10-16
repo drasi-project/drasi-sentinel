@@ -23,6 +23,10 @@ public interface IQueryWorkbench
     Task<bool> MappingReadyAsync(string callerText, CancellationToken cancellationToken);
 
     Task<bool> CommitDueAsync(string callerText, CancellationToken cancellationToken);
+
+    Task<string?> ContinuationAsync(string callerText, CancellationToken cancellationToken);
+
+    Task<string> RepairJoinReplyAsync(string callerText, string reply, CancellationToken cancellationToken);
 }
 
 public sealed class QueryWorkbench(
@@ -57,7 +61,7 @@ public sealed class QueryWorkbench(
 
     private static readonly Regex Identifier = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
     private static readonly Regex QuotedLiteral = new(@"'([^']+)'", RegexOptions.CultureInvariant);
-    private const string JoinArgument = "If a schema relation connects the labels, MATCH it and do not pass joins for that hop. Otherwise pass one joins entry for that hop: [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}]. Then MATCH (a:LabelA)-[:LINK]->(b:LabelB). A comma does not join. The id does not have to be LINK.";
+    private const string JoinArgument = "If a schema relation connects the labels, MATCH it and do not pass joins for that hop. Otherwise pass one joins entry for that hop: [{\"id\":\"LINK\",\"keys\":[{\"label\":\"LabelA\",\"property\":\"key_a\"},{\"label\":\"LabelB\",\"property\":\"key_b\"}]}]. Then MATCH (a:LabelA)-[:LINK]->(b:LabelB). A comma does not join. The id does not have to be LINK. A property that appears on more than one label is a join key. If the caller names it, pass joins on it and do not ask which stored value it has. If several properties are shared and the caller has not named one, ask which property name.";
 
     public IReadOnlyList<AgentTool> Tools { get; } =
     [
@@ -105,9 +109,14 @@ public sealed class QueryWorkbench(
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         if (literals.Length > 0 &&
-            !literals.Any(literal => callerText.Contains(literal, StringComparison.OrdinalIgnoreCase)) &&
-            item?.Examples.Any(example => callerText.Contains(example, StringComparison.OrdinalIgnoreCase)) != true)
-            return $"Query '{queryId}' filters on {string.Join(", ", literals.Select(literal => "'" + literal + "'"))} and does not match this request. Build a new query and subscribe to the new id. Do not replace '{queryId}'.";
+            item?.Examples.Any(example =>
+                callerText.Contains(example, StringComparison.OrdinalIgnoreCase) ||
+                (callerText.Length >= 12 && example.Contains(callerText, StringComparison.OrdinalIgnoreCase))) != true)
+        {
+            var unnamed = literals.Where(literal => !CallerNamedLiteral(callerText, literal)).ToArray();
+            if (unnamed.Length > 0)
+                return $"Query '{queryId}' filters on {string.Join(", ", unnamed.Select(literal => "'" + literal + "'"))} and the caller did not name those values. It is narrower than this request. Build a new query and subscribe to the new id. Do not replace '{queryId}'.";
+        }
         var described = string.Join(
             " ",
             new[] { covered, authored?.Description, item?.Description, item is null ? null : string.Join(" ", item.Examples) }
@@ -164,6 +173,49 @@ public sealed class QueryWorkbench(
             Regex.IsMatch(earlier, $@"\b{Regex.Escape(property)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) &&
             stored.TryGetValue(property, out var values) &&
             values.Any(value => WholeWord(latest, value)));
+    }
+
+    public async Task<string?> ContinuationAsync(string callerText, CancellationToken cancellationToken)
+    {
+        var follow = await FollowUpAsync(callerText, cancellationToken);
+        if (follow.Instruction is not null)
+            return follow.Instruction;
+        if (await CommitDueAsync(callerText, cancellationToken))
+            return "Commit and subscribe in this turn. A stored value already in the caller message is chosen. Do not ask the caller to repeat it or to confirm which property holds it. Do not ask what an earlier word means.";
+        return null;
+    }
+
+    public async Task<string> RepairJoinReplyAsync(string callerText, string reply, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(reply) || string.IsNullOrWhiteSpace(callerText))
+            return reply;
+        var follow = await FollowUpAsync(callerText, cancellationToken);
+        if (follow.Question is null)
+            return reply;
+        if (follow.Key is not null)
+        {
+            var stored = await StoredByPropertyAsync(cancellationToken);
+            if (stored.TryGetValue(follow.Key, out var values) &&
+                values.Any(value => reply.Contains(value, StringComparison.Ordinal) && !WholeWord(callerText, value)) &&
+                (reply.Contains('?') || reply.Contains("which", StringComparison.OrdinalIgnoreCase)))
+                return reply.TrimEnd() + " " + follow.Question;
+            return reply;
+        }
+
+        if (follow.Choices.Count == 0 || follow.Choices.All(property => reply.Contains(property, StringComparison.OrdinalIgnoreCase)))
+            return reply;
+        if (reply.Contains('?') || Regex.IsMatch(reply, @"\b(relationship|join|cannot|can't|unable)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return reply.TrimEnd() + " " + follow.Question;
+        return reply;
+    }
+
+    public static IReadOnlyList<string> ComplementWords(string callerText) => IsComplements(callerText);
+
+    private async Task<JoinFollowUp> FollowUpAsync(string callerText, CancellationToken cancellationToken)
+    {
+        var graph = await runtime.DescribeAsync(cancellationToken);
+        var stored = await StoredByPropertyAsync(cancellationToken);
+        return JoinKeys.FollowUp(callerText, ComplementWords(callerText), graph.Nodes, stored);
     }
 
     public async Task<bool> CommitDueAsync(string callerText, CancellationToken cancellationToken)
@@ -245,6 +297,19 @@ public sealed class QueryWorkbench(
         if ((await PropertyNamesAsync(cancellationToken)).Any(property => WholeWord(callerText, property)))
             return true;
         return stored.Values.SelectMany(values => values).Any(value => WholeWord(callerText, value));
+    }
+
+    private static bool CallerNamedLiteral(string callerText, string literal)
+    {
+        if (callerText.Contains(literal, StringComparison.OrdinalIgnoreCase))
+            return true;
+        foreach (Match word in Regex.Matches(callerText, @"\b[A-Za-z][A-Za-z0-9]{3,}\b"))
+        {
+            if (literal.StartsWith(word.Value, StringComparison.OrdinalIgnoreCase) && literal.Length > word.Value.Length)
+                return true;
+        }
+
+        return false;
     }
 
     private static bool WholeWord(string text, string value) =>

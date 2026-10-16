@@ -27,17 +27,21 @@ public sealed class CatalogAgentResponder(
         var reply = await model.CompleteAsync(instructions, tools, messages, cancellationToken);
         for (var attempt = 0; attempt < 2 && workbench is not null && !tools.Subscribed; attempt++)
         {
-            if (tools.CorrectableSkip is null && !await workbench.CommitDueAsync(callerText, cancellationToken))
+            var continuation = tools.CorrectableSkip
+                ?? tools.NarrowerQuery
+                ?? await workbench.ContinuationAsync(callerText, cancellationToken);
+            if (continuation is null)
                 break;
             var continued = new List<AgentMessage>(messages)
             {
                 new(AgentRole.Assistant, reply),
-                new(AgentRole.User, "Commit and subscribe in this turn. A stored value already in the caller message is chosen. Do not ask the caller to repeat it or to confirm which property holds it. Do not ask what an earlier word means."),
+                new(AgentRole.User, continuation),
             };
             reply = await model.CompleteAsync(instructions, tools, continued, cancellationToken);
         }
         if (workbench is null || tools.Subscribed)
             return reply;
-        return await workbench.IncludeOmittedLabelsAsync(callerText, reply, cancellationToken);
+        reply = await workbench.IncludeOmittedLabelsAsync(callerText, reply, cancellationToken);
+        return await workbench.RepairJoinReplyAsync(callerText, reply, cancellationToken);
     }
 }

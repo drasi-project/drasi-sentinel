@@ -51,7 +51,7 @@ The script prints these prompts:
 
 The prompts describe the situation. They do not include Cypher. The agent
 reads the sources and builds the query. The committed definition is
-`data/authored-queries/<id>.json`.
+`data/authored-queries/<id>.yaml`.
 
 ## Drive a change
 

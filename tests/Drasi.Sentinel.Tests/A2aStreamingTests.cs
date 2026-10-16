@@ -76,6 +76,56 @@ public sealed class A2aStreamingTests
     }
 
     [Fact]
+    public async Task Two_live_sessions_stay_separate_when_requests_overlap()
+    {
+        var repository = new InMemorySentinelRepository();
+        var principal = A2aPrincipalFactory.Create(new ClaimsPrincipal(), new A2aAnonymousManifest());
+        await repository.GetOrCreateTaskAsync(principal, new("session-a"), CancellationToken.None);
+        await repository.GetOrCreateTaskAsync(principal, new("session-b"), CancellationToken.None);
+        await repository.GetOrCreateSubscriptionAsync(LiveWatch(principal, "session-a", "order-pickup-waiting"), CancellationToken.None);
+        await repository.GetOrCreateSubscriptionAsync(LiveWatch(principal, "session-b", "ready-orders"), CancellationToken.None);
+        await repository.AppendEventAsync(
+            principal.Owner,
+            new ConversationEvent(new("session-a"), default, ConversationEventKind.Observation, null, "diff-from-a", DateTimeOffset.UtcNow),
+            CancellationToken.None);
+
+        var seen = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var responder = new RecordingResponderBag(seen);
+        await Task.WhenAll(
+            SendAsync(repository, responder, """
+                {"jsonrpc":"2.0","id":"b","method":"SendMessage","params":{"message":{"role":"ROLE_USER","contextId":"session-b","messageId":"msg-curb","parts":[{"text":"Tell me when a pickup vehicle is at the curb. Keep the watch for 7 days."}]}}}
+                """),
+            SendAsync(repository, responder, """
+                {"jsonrpc":"2.0","id":"a","method":"SendMessage","params":{"message":{"role":"ROLE_USER","contextId":"session-a","messageId":"msg-rows","parts":[{"text":"Show the current rows."}]}}}
+                """));
+
+        Assert.Contains("msg-curb", seen);
+        Assert.Contains("session-a", seen);
+        Assert.DoesNotContain("session-b", seen);
+        var listed = await repository.ListOwnerTasksAsync(principal.Owner, CancellationToken.None);
+        Assert.Equal("order-pickup-waiting", listed.Single(task => task.TaskId.Value == "session-a").QueryId?.Value);
+        Assert.Equal("ready-orders", listed.Single(task => task.TaskId.Value == "session-b").QueryId?.Value);
+        Assert.Equal(SubscriptionState.Active, listed.Single(task => task.TaskId.Value == "session-a").SubscriptionState);
+        Assert.Equal(SubscriptionState.Active, listed.Single(task => task.TaskId.Value == "session-b").SubscriptionState);
+        var other = await repository.ReadEventsAsync(principal.Owner, new("session-b"), new(0), 20, CancellationToken.None);
+        Assert.DoesNotContain(other, item => item.Content.Contains("diff-from-a", StringComparison.Ordinal));
+        var split = await repository.ReadEventsAsync(principal.Owner, new("msg-curb"), new(0), 20, CancellationToken.None);
+        Assert.Contains(split, item => item.Content.Contains("at the curb", StringComparison.Ordinal));
+        Assert.DoesNotContain(split, item => item.Content.Contains("diff-from-a", StringComparison.Ordinal));
+    }
+
+    private static ConversationSubscription LiveWatch(Principal principal, string taskId, string queryId) => new(
+        new(Guid.NewGuid()),
+        new(taskId),
+        principal.Tenant,
+        principal.Owner,
+        new(new(queryId), new("notify"), new(taskId + ":request")),
+        SubscriptionState.Active,
+        new("reaction-" + taskId),
+        DateTimeOffset.UnixEpoch,
+        new Unbounded());
+
+    [Fact]
     public async Task An_unseen_watch_phrase_does_not_reuse_an_occupied_task()
     {
         var repository = new InMemorySentinelRepository();
@@ -258,6 +308,20 @@ public sealed class A2aStreamingTests
             responder,
             new A2aAnonymousManifest());
         await result.ExecuteAsync(context);
+    }
+
+    private sealed class RecordingResponderBag(System.Collections.Concurrent.ConcurrentBag<string> seen) : IAgentResponder
+    {
+        public Task<string> RespondAsync(
+            Principal principal,
+            TaskTurnId turn,
+            string input,
+            IReadOnlyList<AgentMessage> priorTurns,
+            CancellationToken cancellationToken)
+        {
+            seen.Add(turn.TaskId);
+            return Task.FromResult("ok");
+        }
     }
 
     private sealed class RecordingResponder(List<string> seen) : IAgentResponder

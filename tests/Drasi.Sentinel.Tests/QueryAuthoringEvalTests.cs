@@ -191,6 +191,8 @@ public sealed class QueryAuthoringEvalTests
             "Once every stated condition is mapped",
             "Do not end with a question that asks whether to start",
             "already named",
+            "join key",
+            "did not name",
         })
         {
             Assert.Contains(rule, enabled, StringComparison.Ordinal);
@@ -268,6 +270,33 @@ public sealed class QueryAuthoringEvalTests
             sources);
         Assert.Null(await workbench.CoverageGapAsync("pickup-order-ready", "Tell me when an order is ready.", CancellationToken.None));
         Assert.Null(await workbench.CoverageGapAsync("pickup-order-ready", "Tell me when a pickup order is ready for pickup.", CancellationToken.None));
+        await store.SaveAsync(new AuthoredQuery(
+            new QueryId("order-and-curb"),
+            "Ready orders whose vehicle is at the curb.",
+            "MATCH (o:orders)-[:LINK]->(v:vehicles) WHERE o.status = 'ready' AND v.location = 'Curbside' RETURN o.id AS id",
+            ["ledger", "physical"],
+            [new QueryJoinSpec("LINK", [new QueryJoinKeySpec("orders", "plate"), new QueryJoinKeySpec("vehicles", "plate")])],
+            new Unbounded()), CancellationToken.None);
+        var narrower = await workbench.CoverageGapAsync(
+            "order-and-curb",
+            "Tell me when a pickup order is ready for pickup. Keep the watch for 7 days.",
+            CancellationToken.None);
+        Assert.Contains("Curbside", narrower);
+        Assert.Contains("did not name", narrower);
+        Assert.Contains("Do not replace", narrower);
+        await store.SaveAsync(new AuthoredQuery(
+            new QueryId("held-north"),
+            "Held shipments in the north zone.",
+            "MATCH (s:shipments) WHERE s.status = 'held' AND s.zone = 'north' RETURN s.id AS id",
+            ["ledger"],
+            [],
+            new Unbounded()), CancellationToken.None);
+        var held = await workbench.CoverageGapAsync(
+            "held-north",
+            "Tell me when a shipment is held.",
+            CancellationToken.None);
+        Assert.Contains("north", held);
+        Assert.Contains("did not name", held);
         var session = AgentToolSession.Create(
             Unused(),
             Principal(),

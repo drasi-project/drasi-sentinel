@@ -135,6 +135,143 @@ public sealed class QueryAuthoringCoverageTests
         Assert.Empty(runtime.Added);
     }
 
+    [Fact]
+    public async Task A_named_shared_property_is_a_join_key_not_a_stored_value()
+    {
+        var shipments = new GraphNode(
+            "shipments",
+            [new GraphProperty("status", "string"), new GraphProperty("bay_code", "string"), new GraphProperty("ref", "string")],
+            ["yard"]);
+        var docks = new GraphNode(
+            "docks",
+            [new GraphProperty("zone", "string"), new GraphProperty("bay_code", "string"), new GraphProperty("ref", "string")],
+            ["yard"]);
+        var stored = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["status"] = ["held", "moving"],
+            ["zone"] = ["north", "south"],
+            ["bay_code"] = ["B1", "B2"],
+            ["ref"] = ["R1", "R2"],
+        };
+        var mapped = """
+            Tell me when a shipment is held and the dock is quiet.
+            dock zone
+            north
+            """;
+        var asking = JoinKeys.FollowUp(mapped, QueryWorkbench.ComplementWords(mapped), [shipments, docks], stored);
+        Assert.Null(asking.Key);
+        Assert.Contains("bay_code", asking.Choices);
+        Assert.Contains("ref", asking.Choices);
+        Assert.Contains("Do not ask which stored value", asking.Instruction);
+
+        var named = mapped + "\nthe bay code";
+        var chosen = JoinKeys.FollowUp(named, QueryWorkbench.ComplementWords(named), [shipments, docks], stored);
+        Assert.Equal("bay_code", chosen.Key);
+        Assert.Contains("shipments", chosen.Holders);
+        Assert.Contains("docks", chosen.Holders);
+        Assert.DoesNotContain("B1", chosen.Instruction);
+        Assert.Null(JoinKeys.CommitSkip(
+            named,
+            "MATCH (s:shipments)-[:LINK]->(d:docks) WHERE s.status = 'held' AND d.zone = 'north' RETURN s.status AS status",
+            [new QueryJoinSpec("LINK", [new QueryJoinKeySpec("shipments", "bay_code"), new QueryJoinKeySpec("docks", "bay_code")])],
+            QueryWorkbench.ComplementWords(named),
+            [shipments, docks],
+            stored));
+        Assert.Contains(
+            "join key",
+            JoinKeys.CommitSkip(
+                named,
+                "MATCH (s:shipments) WHERE s.bay_code = 'B1' RETURN s.status AS status",
+                [],
+                QueryWorkbench.ComplementWords(named),
+                [shipments, docks],
+                stored));
+
+        var runtime = PickupRuntime();
+        var sources = new HashSet<string>(["orders-db", "fleet-db"], StringComparer.Ordinal);
+        var authoring = new QueryAuthoring(
+            runtime,
+            new InMemoryAuthoredQueryStore(),
+            new LiveCatalog(QueryAuthoringEvalSupport.Catalog()),
+            sources,
+            new ReactionId("notify"));
+        var location = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id",
+            ["sources"] = "orders-db",
+            ["commit_as"] = "waiting-location",
+            ["description"] = "A location mapping that still needs a value.",
+            ["caller_text"] = """
+                Tell me when an order is ready for pickup and the customer is waiting.
+                vehicle location
+                """,
+        }, CancellationToken.None);
+        Assert.Contains("Ask which stored value", location, StringComparison.Ordinal);
+        Assert.Contains("location", location, StringComparison.Ordinal);
+
+        var plate = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:vehicles) WHERE n.plate = 'F1000' RETURN n.plate AS plate",
+            ["sources"] = "fleet-db",
+            ["commit_as"] = "plate-filter",
+            ["description"] = "A guessed plate filter.",
+            ["caller_text"] = """
+                Tell me when an order is ready for pickup and the customer is waiting.
+                vehicle location
+                curbside
+                the vehicle license plate
+                """,
+        }, CancellationToken.None);
+        Assert.Contains("join key", plate, StringComparison.Ordinal);
+        Assert.Contains("plate", plate, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ask which stored value", plate, StringComparison.Ordinal);
+        Assert.DoesNotContain("A1234", plate, StringComparison.Ordinal);
+        Assert.DoesNotContain("G2000", plate, StringComparison.Ordinal);
+
+        var workbench = new QueryWorkbench(authoring, runtime, new InMemoryAuthoredQueryStore(), new LiveCatalog(QueryAuthoringEvalSupport.Catalog()), sources);
+        var beforeKey = """
+            Tell me when an order is ready for pickup and the customer is waiting.
+            vehicle location
+            curbside
+            """;
+        var repaired = await workbench.RepairJoinReplyAsync(
+            beforeKey,
+            "I can't continue because the sources expose no relationship path.",
+            CancellationToken.None);
+        Assert.Contains("plate", repaired, StringComparison.Ordinal);
+        Assert.Contains("customer_name", repaired, StringComparison.Ordinal);
+        var continuation = await workbench.ContinuationAsync(beforeKey + "\nthe vehicle license plate", CancellationToken.None);
+        Assert.Contains("join key is plate", continuation);
+        Assert.DoesNotContain("F1000", continuation);
+    }
+
+    private static RecordingRuntime PickupRuntime()
+    {
+        var runtime = new RecordingRuntime
+        {
+            Graph = new SourceGraph(
+                [
+                    new GraphNode("orders", [new GraphProperty("id", "string"), new GraphProperty("status", "string"), new GraphProperty("plate", "string"), new GraphProperty("customer_name", "string"), new GraphProperty("driver_name", "string")], ["orders-db"]),
+                    new GraphNode("vehicles", [new GraphProperty("plate", "string"), new GraphProperty("location", "string"), new GraphProperty("customer_name", "string"), new GraphProperty("driver_name", "string")], ["fleet-db"]),
+                ],
+                [],
+                []),
+        };
+        runtime.Schemas["orders-db"] = System.Text.Json.Nodes.JsonNode.Parse("""{"nodes":[{"label":"orders","properties":[{"name":"id"},{"name":"status"},{"name":"plate"},{"name":"customer_name"},{"name":"driver_name"}]}],"relations":[]}""");
+        runtime.Schemas["fleet-db"] = System.Text.Json.Nodes.JsonNode.Parse("""{"nodes":[{"label":"vehicles","properties":[{"name":"plate"},{"name":"location"},{"name":"customer_name"},{"name":"driver_name"}]}],"relations":[]}""");
+        runtime.LabelSamples["orders"] =
+        [
+            System.Text.Json.Nodes.JsonNode.Parse("""{"id":"1","status":"preparing","plate":"A1234","customer_name":"Ada","driver_name":"Lee"}""")!,
+            System.Text.Json.Nodes.JsonNode.Parse("""{"id":"2","status":"ready","plate":"F1000","customer_name":"Noah","driver_name":"Kim"}""")!,
+        ];
+        runtime.LabelSamples["vehicles"] =
+        [
+            System.Text.Json.Nodes.JsonNode.Parse("""{"plate":"A1234","location":"Parking","customer_name":"Ada","driver_name":"Lee"}""")!,
+            System.Text.Json.Nodes.JsonNode.Parse("""{"plate":"G2000","location":"Curbside","customer_name":"Maya","driver_name":"Oz"}""")!,
+        ];
+        return runtime;
+    }
+
     private static AgentToolSession Session(RecordingRuntime runtime, InMemoryAuthoredQueryStore store, LiveCatalog catalog) =>
         AgentToolSession.Create(
             new ConversationSubscriptions(
