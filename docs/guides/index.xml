@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Guides on Drasi Sentinel Docs</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/</link><description>Recent content in Guides on Drasi Sentinel Docs</description><generator>Hugo</generator><language>en</language><copyright>Copyright&amp;nbsp;©&amp;nbsp;Drasi&amp;nbsp;a&amp;nbsp;Series&amp;nbsp;of&amp;nbsp;LF&amp;nbsp;Projects,&amp;nbsp;LLC. For&amp;nbsp;website&amp;nbsp;terms&amp;nbsp;of&amp;nbsp;use,&amp;nbsp;trademark&amp;nbsp;policy&amp;nbsp;and&amp;nbsp;other&amp;nbsp;project&amp;nbsp;policies&amp;nbsp;please&amp;nbsp;see&amp;nbsp;&lt;a href="https://lfprojects.org/policies/"&gt;lfprojects.org/policies/&lt;/a&gt;.</copyright><atom:link href="https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/index.xml" rel="self" type="application/rss+xml"/><item><title>Start a watch</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/start-a-watch/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/start-a-watch/</guid><description>&lt;p&gt;Read the Agent Card at &lt;code&gt;/.well-known/agent-card.json&lt;/code&gt; once. A skill tagged
+&lt;code&gt;continuous-query&lt;/code&gt; is one watch. Its description says what is watched. Its
+examples, when present, are utterances that select it.&lt;/p&gt;
+&lt;h2 id="send-one-message"&gt;Send one message&lt;/h2&gt;
+&lt;p&gt;Choose a new &lt;code&gt;taskId&lt;/code&gt; and &lt;code&gt;messageId&lt;/code&gt;. POST &lt;code&gt;message/stream&lt;/code&gt; to the JSON-RPC
+URL on the card. The user text is one example from the chosen skill, or the
+skill description when it lists no examples. That text is the whole message.&lt;/p&gt;</description></item><item><title>Keep the stream open</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/keep-the-stream/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/keep-the-stream/</guid><description>&lt;p&gt;A watch can stay open for hours or days. The HTTP response is the delivery
+channel. Do not close it because it has been idle.&lt;/p&gt;
+&lt;h2 id="what-an-idle-stream-looks-like"&gt;What an idle stream looks like&lt;/h2&gt;
+&lt;p&gt;The host writes an SSE comment at least every 15 seconds:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;: ping
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;A comment has no &lt;code&gt;id&lt;/code&gt; line and is not an event. Do not treat it as a diff.
+Do not set a read timeout on this stream. A timeout will drop a healthy watch.&lt;/p&gt;</description></item><item><title>Ask for current results</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/current-results/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/current-results/</guid><description>&lt;p&gt;Current results are not a second watch. Send the request on the task a watch
+already opened.&lt;/p&gt;
+&lt;p&gt;Use a new &lt;code&gt;messageId&lt;/code&gt; and this text as the only text part:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;What are the current results for this task?
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;The output is an artifact update whose data &lt;code&gt;type&lt;/code&gt; is
+&lt;code&gt;current_query_results&lt;/code&gt;. It contains &lt;code&gt;taskId&lt;/code&gt;, &lt;code&gt;subscriptionId&lt;/code&gt;, &lt;code&gt;queryId&lt;/code&gt;,
+&lt;code&gt;queryDescription&lt;/code&gt;, and &lt;code&gt;rows&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Do not send a query id, a source name, Cypher, or a filter. The host resolves
+the task&amp;rsquo;s subscription.&lt;/p&gt;</description></item><item><title>Set a lifetime</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/set-a-lifetime/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/set-a-lifetime/</guid><description>&lt;p&gt;Every watch has a lifetime. Put it in the opening message:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Tell me when an invoice is paid. Keep the watch for 7 days.
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Accepted tokens are &lt;code&gt;none&lt;/code&gt;, or a positive integer plus &lt;code&gt;s&lt;/code&gt;, &lt;code&gt;m&lt;/code&gt;, &lt;code&gt;h&lt;/code&gt;, or &lt;code&gt;d&lt;/code&gt;.
+&lt;code&gt;7d&lt;/code&gt; is seven days. &lt;code&gt;none&lt;/code&gt; means the watch does not expire, unless the
+manifest caps it.&lt;/p&gt;
+&lt;h2 id="if-you-leave-it-out"&gt;If you leave it out&lt;/h2&gt;
+&lt;p&gt;The agent asks how long to keep the watch. Answer on the same task. Do not
+open a new task for the answer.&lt;/p&gt;</description></item><item><title>Author a query</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/author-a-query/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/author-a-query/</guid><description>&lt;p&gt;Query authoring is off unless the manifest sets
+&lt;code&gt;service.query_authoring.enabled&lt;/code&gt; to &lt;code&gt;true&lt;/code&gt;. That setting requires exactly
+one reaction. The host binds that reaction to the query the agent commits.&lt;/p&gt;
+&lt;h2 id="describe-the-change"&gt;Describe the change&lt;/h2&gt;
+&lt;p&gt;If no &lt;code&gt;continuous-query&lt;/code&gt; skill matches, send the description as the whole
+user text on a new task. Do not send Cypher, a source name, a filter, or a
+destination.&lt;/p&gt;
+&lt;p&gt;Include the lifetime in that text. The &lt;a href="https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/building-comfort/"&gt;building comfort&lt;/a&gt;
+and &lt;a href="https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/curbside/"&gt;curbside&lt;/a&gt; demos are hosts that work this way.&lt;/p&gt;</description></item></channel></rss>

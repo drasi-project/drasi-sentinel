@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Drasi Sentinel on Drasi Sentinel Docs</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/</link><description>Recent content in Drasi Sentinel on Drasi Sentinel Docs</description><generator>Hugo</generator><language>en</language><copyright>Copyright&amp;nbsp;©&amp;nbsp;Drasi&amp;nbsp;a&amp;nbsp;Series&amp;nbsp;of&amp;nbsp;LF&amp;nbsp;Projects,&amp;nbsp;LLC. For&amp;nbsp;website&amp;nbsp;terms&amp;nbsp;of&amp;nbsp;use,&amp;nbsp;trademark&amp;nbsp;policy&amp;nbsp;and&amp;nbsp;other&amp;nbsp;project&amp;nbsp;policies&amp;nbsp;please&amp;nbsp;see&amp;nbsp;&lt;a href="https://lfprojects.org/policies/"&gt;lfprojects.org/policies/&lt;/a&gt;.</copyright><atom:link href="https://supreme-guacamole-w9j9wne.pages.github.io/index.xml" rel="self" type="application/rss+xml"/><item><title>Accounting</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/accounting/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/accounting/</guid><description>&lt;p&gt;This demo publishes one query, &lt;code&gt;invoice-paid&lt;/code&gt;, and sets
+&lt;code&gt;service.query_authoring.enabled&lt;/code&gt; to &lt;code&gt;false&lt;/code&gt;. A request that does not match
+that skill does not start a watch.&lt;/p&gt;
+&lt;p&gt;PostgreSQL listens on &lt;code&gt;127.0.0.1:5432&lt;/code&gt;. Inspector listens on
+&lt;code&gt;http://127.0.0.1:8081/&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/accounting-local-demo
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;cp .env.example .env
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;./demo.sh
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;In Inspector, click &lt;strong&gt;Send streaming&lt;/strong&gt; and send:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Tell me when an invoice is paid. Keep the watch for 7 days.
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;When the subscription is active, run the printed &lt;code&gt;docker exec&lt;/code&gt; update. The
+seeded unpaid invoice enters the result set. The artifact &lt;code&gt;diffType&lt;/code&gt; is
+&lt;code&gt;Add&lt;/code&gt;.&lt;/p&gt;</description></item><item><title>Manifest</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/reference/manifest/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/reference/manifest/</guid><description>&lt;p&gt;The host loads one YAML file. Queries and reactions are curated assets. Source
+connection settings stay in this file. Callers never send them.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-yaml" data-lang="yaml"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;service&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;profile&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;demo&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;data&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;data&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;max_ttl&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;30d&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;a2a&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;authentication&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;mode&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;anonymous&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;query_authoring&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;enabled&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="kc"&gt;false&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;queries&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="nt"&gt;id&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;overdue-invoices&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;description&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;Finds open invoices whose due date has passed.&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;examples&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="l"&gt;Tell me as soon as an invoice is overdue.&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;cypher&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;MATCH (invoice:Invoice) RETURN invoice.id AS invoice_id&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;sources&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="p"&gt;[&lt;/span&gt;&lt;span class="l"&gt;invoices]&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="nt"&gt;reactions&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="p"&gt;[&lt;/span&gt;&lt;span class="l"&gt;notify-account]&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nt"&gt;reactions&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="w"&gt; &lt;/span&gt;- &lt;span class="nt"&gt;id&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt;&lt;span class="w"&gt; &lt;/span&gt;&lt;span class="l"&gt;notify-account&lt;/span&gt;&lt;span class="w"&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;h2 id="service"&gt;service&lt;/h2&gt;
+&lt;p&gt;&lt;code&gt;profile&lt;/code&gt; is &lt;code&gt;demo&lt;/code&gt;, &lt;code&gt;development&lt;/code&gt;, or &lt;code&gt;production&lt;/code&gt;. Anonymous authentication
+is valid only when &lt;code&gt;profile&lt;/code&gt; is &lt;code&gt;demo&lt;/code&gt;. A JWT host sets &lt;code&gt;mode&lt;/code&gt; to &lt;code&gt;jwt&lt;/code&gt; and
+supplies &lt;code&gt;issuer&lt;/code&gt;, &lt;code&gt;audience&lt;/code&gt;, and &lt;code&gt;public_key&lt;/code&gt;.&lt;/p&gt;</description></item><item><title>Start a watch</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/start-a-watch/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/start-a-watch/</guid><description>&lt;p&gt;Read the Agent Card at &lt;code&gt;/.well-known/agent-card.json&lt;/code&gt; once. A skill tagged
+&lt;code&gt;continuous-query&lt;/code&gt; is one watch. Its description says what is watched. Its
+examples, when present, are utterances that select it.&lt;/p&gt;
+&lt;h2 id="send-one-message"&gt;Send one message&lt;/h2&gt;
+&lt;p&gt;Choose a new &lt;code&gt;taskId&lt;/code&gt; and &lt;code&gt;messageId&lt;/code&gt;. POST &lt;code&gt;message/stream&lt;/code&gt; to the JSON-RPC
+URL on the card. The user text is one example from the chosen skill, or the
+skill description when it lists no examples. That text is the whole message.&lt;/p&gt;</description></item><item><title>A2A contract</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/reference/a2a/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/reference/a2a/</guid><description>&lt;p&gt;The Agent Card is &lt;code&gt;/.well-known/agent-card.json&lt;/code&gt;. It advertises &lt;code&gt;JSONRPC&lt;/code&gt;,
+&lt;code&gt;capabilities.streaming: true&lt;/code&gt;, and &lt;code&gt;capabilities.pushNotifications: true&lt;/code&gt;.
+POST JSON-RPC 2.0 to the URL of the &lt;code&gt;supportedInterfaces&lt;/code&gt; entry whose
+&lt;code&gt;protocolBinding&lt;/code&gt; is &lt;code&gt;JSONRPC&lt;/code&gt;. Use &lt;code&gt;Content-Type: application/json&lt;/code&gt; and
+&lt;code&gt;Accept: text/event-stream&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Do not use &lt;code&gt;message/send&lt;/code&gt; as the primary call. Use &lt;code&gt;message/stream&lt;/code&gt;.&lt;/p&gt;
+&lt;h2 id="open-a-watch"&gt;Open a watch&lt;/h2&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-json" data-lang="json"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;jsonrpc&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;2.0&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;id&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;1&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;method&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;message/stream&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;params&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;message&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="p"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;role&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;user&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;taskId&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;task-1&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;messageId&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;msg-1&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;parts&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="p"&gt;[&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;{&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;mediaType&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;text/plain&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;,&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="nt"&gt;&amp;#34;text&amp;#34;&lt;/span&gt;&lt;span class="p"&gt;:&lt;/span&gt; &lt;span class="s2"&gt;&amp;#34;Tell me when an invoice is paid. Keep the watch for 7 days.&amp;#34;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;]&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt; &lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="p"&gt;}&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;&lt;code&gt;parts&lt;/code&gt; is one text part. A part with &lt;code&gt;kind&lt;/code&gt; &lt;code&gt;text&lt;/code&gt; is also accepted.&lt;/p&gt;</description></item><item><title>Building comfort</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/building-comfort/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/building-comfort/</guid><description>&lt;p&gt;This demo starts the PostgreSQL building, floor, and room source from the
+&lt;a href="https://drasi.io/drasi-server/tutorials/building-comfort/"&gt;Drasi building comfort tutorial&lt;/a&gt;.
+The catalog has no queries. &lt;code&gt;query_authoring.enabled&lt;/code&gt; is &lt;code&gt;true&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;PostgreSQL listens on &lt;code&gt;127.0.0.1:5732&lt;/code&gt;. Inspector listens on
+&lt;code&gt;http://127.0.0.1:8085/&lt;/code&gt;. Port &lt;code&gt;5432&lt;/code&gt; belongs to the accounting demo.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/building-comfort-local-demo
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;cp .env.example .env
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;./demo.sh
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Send one watch per task. A comfort level you define in the message is part
+of the query, not a stored column. After the subscription is active, the
+demo README prints the &lt;code&gt;docker exec&lt;/code&gt; update that pushes one floor out of
+band.&lt;/p&gt;</description></item><item><title>Keep the stream open</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/keep-the-stream/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/keep-the-stream/</guid><description>&lt;p&gt;A watch can stay open for hours or days. The HTTP response is the delivery
+channel. Do not close it because it has been idle.&lt;/p&gt;
+&lt;h2 id="what-an-idle-stream-looks-like"&gt;What an idle stream looks like&lt;/h2&gt;
+&lt;p&gt;The host writes an SSE comment at least every 15 seconds:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;: ping
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;A comment has no &lt;code&gt;id&lt;/code&gt; line and is not an event. Do not treat it as a diff.
+Do not set a read timeout on this stream. A timeout will drop a healthy watch.&lt;/p&gt;</description></item><item><title>Curbside</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/curbside/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/curbside/</guid><description>&lt;p&gt;Orders live in PostgreSQL on &lt;code&gt;127.0.0.1:5433&lt;/code&gt;. Vehicles live in MySQL on
+&lt;code&gt;127.0.0.1:3309&lt;/code&gt;. The catalog has no queries. The agent builds each watch
+from a prompt, one task at a time. Inspector is at &lt;code&gt;http://127.0.0.1:8083/&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/curbside-local-demo
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;./demo.sh
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Click &lt;strong&gt;Send streaming&lt;/strong&gt;. Wait until the subscription is active before you
+send the next watch. A later watch request in the same Inspector session
+starts another task. The first watch keeps its stream. A mapping answer
+stays on the task that asked.&lt;/p&gt;</description></item><item><title>Ask for current results</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/current-results/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/current-results/</guid><description>&lt;p&gt;Current results are not a second watch. Send the request on the task a watch
+already opened.&lt;/p&gt;
+&lt;p&gt;Use a new &lt;code&gt;messageId&lt;/code&gt; and this text as the only text part:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;What are the current results for this task?
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;The output is an artifact update whose data &lt;code&gt;type&lt;/code&gt; is
+&lt;code&gt;current_query_results&lt;/code&gt;. It contains &lt;code&gt;taskId&lt;/code&gt;, &lt;code&gt;subscriptionId&lt;/code&gt;, &lt;code&gt;queryId&lt;/code&gt;,
+&lt;code&gt;queryDescription&lt;/code&gt;, and &lt;code&gt;rows&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;Do not send a query id, a source name, Cypher, or a filter. The host resolves
+the task&amp;rsquo;s subscription.&lt;/p&gt;</description></item><item><title>Invoice overdue</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/invoice-overdue/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/invoice-overdue/</guid><description>&lt;p&gt;This example is not an anonymous demo. Copy &lt;code&gt;secrets/secrets.json.example&lt;/code&gt;
+to &lt;code&gt;secrets/secrets.json&lt;/code&gt;, mode &lt;code&gt;0600&lt;/code&gt;, and fill in the CDC password, CDC
+port, and JWT public key. Set the Azure OpenAI variables, then run:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/invoice-overdue
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;dotnet run --project ../../src/Drasi.Sentinel.Host -- sentinel.yaml
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Connect Inspector to the Agent Card, click &lt;strong&gt;Send streaming&lt;/strong&gt;, and send:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Tell me when an invoice is overdue. Keep the watch for 7 days.
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Keep the stream open, or reconnect with &lt;code&gt;tasks/subscribe&lt;/code&gt; and
+&lt;code&gt;Last-Event-ID&lt;/code&gt;. The caller must present the JWT the manifest expects.&lt;/p&gt;</description></item><item><title>Set a lifetime</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/set-a-lifetime/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/set-a-lifetime/</guid><description>&lt;p&gt;Every watch has a lifetime. Put it in the opening message:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Tell me when an invoice is paid. Keep the watch for 7 days.
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Accepted tokens are &lt;code&gt;none&lt;/code&gt;, or a positive integer plus &lt;code&gt;s&lt;/code&gt;, &lt;code&gt;m&lt;/code&gt;, &lt;code&gt;h&lt;/code&gt;, or &lt;code&gt;d&lt;/code&gt;.
+&lt;code&gt;7d&lt;/code&gt; is seven days. &lt;code&gt;none&lt;/code&gt; means the watch does not expire, unless the
+manifest caps it.&lt;/p&gt;
+&lt;h2 id="if-you-leave-it-out"&gt;If you leave it out&lt;/h2&gt;
+&lt;p&gt;The agent asks how long to keep the watch. Answer on the same task. Do not
+open a new task for the answer.&lt;/p&gt;</description></item><item><title>Author a query</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/author-a-query/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/guides/author-a-query/</guid><description>&lt;p&gt;Query authoring is off unless the manifest sets
+&lt;code&gt;service.query_authoring.enabled&lt;/code&gt; to &lt;code&gt;true&lt;/code&gt;. That setting requires exactly
+one reaction. The host binds that reaction to the query the agent commits.&lt;/p&gt;
+&lt;h2 id="describe-the-change"&gt;Describe the change&lt;/h2&gt;
+&lt;p&gt;If no &lt;code&gt;continuous-query&lt;/code&gt; skill matches, send the description as the whole
+user text on a new task. Do not send Cypher, a source name, a filter, or a
+destination.&lt;/p&gt;
+&lt;p&gt;Include the lifetime in that text. The &lt;a href="https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/building-comfort/"&gt;building comfort&lt;/a&gt;
+and &lt;a href="https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/curbside/"&gt;curbside&lt;/a&gt; demos are hosts that work this way.&lt;/p&gt;</description></item></channel></rss>

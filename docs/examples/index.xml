@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Examples on Drasi Sentinel Docs</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/</link><description>Recent content in Examples on Drasi Sentinel Docs</description><generator>Hugo</generator><language>en</language><copyright>Copyright&amp;nbsp;©&amp;nbsp;Drasi&amp;nbsp;a&amp;nbsp;Series&amp;nbsp;of&amp;nbsp;LF&amp;nbsp;Projects,&amp;nbsp;LLC. For&amp;nbsp;website&amp;nbsp;terms&amp;nbsp;of&amp;nbsp;use,&amp;nbsp;trademark&amp;nbsp;policy&amp;nbsp;and&amp;nbsp;other&amp;nbsp;project&amp;nbsp;policies&amp;nbsp;please&amp;nbsp;see&amp;nbsp;&lt;a href="https://lfprojects.org/policies/"&gt;lfprojects.org/policies/&lt;/a&gt;.</copyright><atom:link href="https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/index.xml" rel="self" type="application/rss+xml"/><item><title>Accounting</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/accounting/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/accounting/</guid><description>&lt;p&gt;This demo publishes one query, &lt;code&gt;invoice-paid&lt;/code&gt;, and sets
+&lt;code&gt;service.query_authoring.enabled&lt;/code&gt; to &lt;code&gt;false&lt;/code&gt;. A request that does not match
+that skill does not start a watch.&lt;/p&gt;
+&lt;p&gt;PostgreSQL listens on &lt;code&gt;127.0.0.1:5432&lt;/code&gt;. Inspector listens on
+&lt;code&gt;http://127.0.0.1:8081/&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/accounting-local-demo
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;cp .env.example .env
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;./demo.sh
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;In Inspector, click &lt;strong&gt;Send streaming&lt;/strong&gt; and send:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Tell me when an invoice is paid. Keep the watch for 7 days.
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;When the subscription is active, run the printed &lt;code&gt;docker exec&lt;/code&gt; update. The
+seeded unpaid invoice enters the result set. The artifact &lt;code&gt;diffType&lt;/code&gt; is
+&lt;code&gt;Add&lt;/code&gt;.&lt;/p&gt;</description></item><item><title>Building comfort</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/building-comfort/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/building-comfort/</guid><description>&lt;p&gt;This demo starts the PostgreSQL building, floor, and room source from the
+&lt;a href="https://drasi.io/drasi-server/tutorials/building-comfort/"&gt;Drasi building comfort tutorial&lt;/a&gt;.
+The catalog has no queries. &lt;code&gt;query_authoring.enabled&lt;/code&gt; is &lt;code&gt;true&lt;/code&gt;.&lt;/p&gt;
+&lt;p&gt;PostgreSQL listens on &lt;code&gt;127.0.0.1:5732&lt;/code&gt;. Inspector listens on
+&lt;code&gt;http://127.0.0.1:8085/&lt;/code&gt;. Port &lt;code&gt;5432&lt;/code&gt; belongs to the accounting demo.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/building-comfort-local-demo
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;cp .env.example .env
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;./demo.sh
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Send one watch per task. A comfort level you define in the message is part
+of the query, not a stored column. After the subscription is active, the
+demo README prints the &lt;code&gt;docker exec&lt;/code&gt; update that pushes one floor out of
+band.&lt;/p&gt;</description></item><item><title>Curbside</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/curbside/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/curbside/</guid><description>&lt;p&gt;Orders live in PostgreSQL on &lt;code&gt;127.0.0.1:5433&lt;/code&gt;. Vehicles live in MySQL on
+&lt;code&gt;127.0.0.1:3309&lt;/code&gt;. The catalog has no queries. The agent builds each watch
+from a prompt, one task at a time. Inspector is at &lt;code&gt;http://127.0.0.1:8083/&lt;/code&gt;.&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/curbside-local-demo
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;./demo.sh
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Click &lt;strong&gt;Send streaming&lt;/strong&gt;. Wait until the subscription is active before you
+send the next watch. A later watch request in the same Inspector session
+starts another task. The first watch keeps its stream. A mapping answer
+stays on the task that asked.&lt;/p&gt;</description></item><item><title>Invoice overdue</title><link>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/invoice-overdue/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://supreme-guacamole-w9j9wne.pages.github.io/docs/examples/invoice-overdue/</guid><description>&lt;p&gt;This example is not an anonymous demo. Copy &lt;code&gt;secrets/secrets.json.example&lt;/code&gt;
+to &lt;code&gt;secrets/secrets.json&lt;/code&gt;, mode &lt;code&gt;0600&lt;/code&gt;, and fill in the CDC password, CDC
+port, and JWT public key. Set the Azure OpenAI variables, then run:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-bash" data-lang="bash"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;&lt;span class="nb"&gt;cd&lt;/span&gt; examples/invoice-overdue
+&lt;/span&gt;&lt;/span&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;dotnet run --project ../../src/Drasi.Sentinel.Host -- sentinel.yaml
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Connect Inspector to the Agent Card, click &lt;strong&gt;Send streaming&lt;/strong&gt;, and send:&lt;/p&gt;
+&lt;div class="highlight"&gt;&lt;pre tabindex="0" class="chroma"&gt;&lt;code class="language-text" data-lang="text"&gt;&lt;span class="line"&gt;&lt;span class="cl"&gt;Tell me when an invoice is overdue. Keep the watch for 7 days.
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;p&gt;Keep the stream open, or reconnect with &lt;code&gt;tasks/subscribe&lt;/code&gt; and
+&lt;code&gt;Last-Event-ID&lt;/code&gt;. The caller must present the JWT the manifest expects.&lt;/p&gt;</description></item></channel></rss>
