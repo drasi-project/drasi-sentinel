@@ -48,7 +48,7 @@ public sealed class QueryAuthoringModelEval(ITestOutputHelper output)
         var reply = await language.CompleteAsync(
             AgentTurn.Render(catalog.Catalog, new QueryAuthoringPrompt(QueryAuthoringEvalSupport.SourceIds)),
             tools,
-            AgentMessages.Create(Array.Empty<string>(), "Tell me when an open order has a matching payment. Build the query against the configured sources and subscribe."),
+            AgentMessages.Create(Array.Empty<string>(), "Tell me when an open order has a matching payment. Build the query against the configured sources and subscribe. Keep the watch for 1 day."),
             timeout.Token);
 
         var authored = await store.ListAsync(CancellationToken.None);

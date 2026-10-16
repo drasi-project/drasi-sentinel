@@ -569,7 +569,8 @@ public sealed class QueryAuthoringEvalTests
             new ReactionId("notify")));
 
         var reused = await session.InvokeAsync(AgentTurn.SubscribeTool, new Dictionary<string, string?> { ["query"] = "pickup-order-ready" });
-        Assert.Contains("does not match", reused, StringComparison.Ordinal);
+        Assert.Contains("did not name", reused, StringComparison.Ordinal);
+        Assert.Contains("narrower", reused, StringComparison.Ordinal);
         Assert.Contains("query_rejected", reused, StringComparison.Ordinal);
 
         var committed = JsonDocument.Parse(await session.InvokeAsync(QueryWorkbench.AddQueryTool, new Dictionary<string, string?>
@@ -586,6 +587,52 @@ public sealed class QueryAuthoringEvalTests
         Assert.Equal(
             "MATCH (n:orders) WHERE n.status = 'ready' RETURN n.id AS id, n.status AS status",
             (await store.FindAsync(new QueryId("pickup-order-ready"), CancellationToken.None))!.Cypher);
+    }
+
+    [Fact]
+    public async Task Unique_token_of_one_stored_value_is_chosen_without_asking_about_other_nouns()
+    {
+        var runtime = new RecordingRuntime();
+        runtime.Schemas["yard-db"] = JsonNode.Parse("""{"nodes":[{"label":"trucks","properties":[{"name":"zone"}]}],"relations":[]}""");
+        runtime.LabelSamples["trucks"] =
+        [
+            JsonNode.Parse("""{"zone":"Dockside"}""")!,
+            JsonNode.Parse("""{"zone":"Yard"}""")!,
+        ];
+        var sources = new HashSet<string>(["yard-db"], StringComparer.Ordinal);
+        var catalog = new LiveCatalog(QueryAuthoringEvalSupport.Catalog());
+        var store = new InMemoryAuthoredQueryStore();
+        var workbench = new QueryWorkbench(
+            new QueryAuthoring(runtime, store, catalog, sources, new ReactionId("notify")),
+            runtime,
+            store,
+            catalog,
+            sources);
+        var caller = "Tell me when a freight truck is at the dock. Keep the watch for 2 days.";
+
+        Assert.True(await workbench.CommitDueAsync(caller, CancellationToken.None));
+        var continuation = await workbench.ContinuationAsync(caller, CancellationToken.None);
+        Assert.Contains("zone = 'Dockside'", continuation);
+        Assert.Contains("another noun", continuation);
+        Assert.DoesNotContain("freight", continuation, StringComparison.OrdinalIgnoreCase);
+
+        runtime.LabelSamples["trucks"] =
+        [
+            JsonNode.Parse("""{"zone":"Northlot"}""")!,
+            JsonNode.Parse("""{"zone":"Northyard"}""")!,
+        ];
+        Assert.False(await workbench.CommitDueAsync(
+            "Tell me when a freight truck is at the north. Keep the watch for 2 days.",
+            CancellationToken.None));
+
+        runtime.LabelSamples["trucks"] =
+        [
+            JsonNode.Parse("""{"zone":"Dockside"}""")!,
+            JsonNode.Parse("""{"zone":"Yard"}""")!,
+        ];
+        Assert.False(await workbench.CommitDueAsync(
+            "Tell me when the shipment is waiting and the truck is at the dock.",
+            CancellationToken.None));
     }
 
     private static Dictionary<string, string?> Commit(string id, string query, string description, string? callerText = null) => new()

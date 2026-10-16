@@ -180,9 +180,13 @@ public sealed class QueryWorkbench(
         var follow = await FollowUpAsync(callerText, cancellationToken);
         if (follow.Instruction is not null)
             return follow.Instruction;
-        if (await CommitDueAsync(callerText, cancellationToken))
+        if (!await CommitDueAsync(callerText, cancellationToken))
+            return null;
+        var named = UniqueNamedFilters(callerText, await StoredByPropertyAsync(cancellationToken));
+        if (named.Count == 0)
             return "Commit and subscribe in this turn. A stored value already in the caller message is chosen. Do not ask the caller to repeat it or to confirm which property holds it. Do not ask what an earlier word means.";
-        return null;
+        var filters = string.Join(" and ", named.Select(item => item.Property + " = '" + item.Value + "'"));
+        return "Commit and subscribe in this turn. The caller already named " + filters + ". Filter on only those exact stored values. Do not add a stored value the caller did not name. Do not ask which field another noun corresponds to. Other nouns are not uncovered words.";
     }
 
     public async Task<string> RepairJoinReplyAsync(string callerText, string reply, CancellationToken cancellationToken)
@@ -240,7 +244,9 @@ public sealed class QueryWorkbench(
             return true;
         if (IsComplements(callerText).Any(word => !MatchesStored(word, values)))
             return false;
-        return values.Any(value => WholeWord(callerText, value));
+        if (values.Any(value => WholeWord(callerText, value)))
+            return true;
+        return UniqueNamedFilters(callerText, stored).Count > 0;
     }
 
     internal static bool UnboundComplementLiteral(string callerText, string property, string literal) =>
@@ -356,6 +362,44 @@ public sealed class QueryWorkbench(
         }
 
         return words.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    internal static IReadOnlyList<(string Property, string Value)> UniqueNamedFilters(
+        string callerText,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> stored)
+    {
+        if (string.IsNullOrWhiteSpace(callerText) || stored.Count == 0)
+            return [];
+        var chosen = new List<(string Property, string Value)>();
+        foreach (Match word in Regex.Matches(callerText, @"\b[A-Za-z][A-Za-z0-9]{3,}\b"))
+        {
+            if (Stopwords.Contains(word.Value))
+                continue;
+            var hits = new List<(string Property, string Value)>();
+            foreach (var (property, values) in stored)
+            {
+                foreach (var value in values)
+                {
+                    if (value.Equals(word.Value, StringComparison.OrdinalIgnoreCase) ||
+                        (value.StartsWith(word.Value, StringComparison.OrdinalIgnoreCase) && value.Length > word.Value.Length))
+                        hits.Add((property, value));
+                }
+            }
+
+            var distinct = hits
+                .GroupBy(hit => hit.Property + "\0" + hit.Value, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToArray();
+            if (distinct.Length != 1)
+                continue;
+            if (chosen.Any(item =>
+                item.Property.Equals(distinct[0].Property, StringComparison.OrdinalIgnoreCase) &&
+                item.Value.Equals(distinct[0].Value, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            chosen.Add(distinct[0]);
+        }
+
+        return chosen;
     }
 
     private static bool MatchesStored(string word, IReadOnlyList<string> values) =>
