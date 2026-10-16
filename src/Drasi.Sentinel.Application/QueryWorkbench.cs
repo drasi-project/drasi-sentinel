@@ -147,6 +147,7 @@ public sealed class QueryWorkbench(
         var properties = await PropertyNamesAsync(cancellationToken);
         var stored = await StoredValuesAsync(labels, cancellationToken);
         var unmapped = complements.Where(word =>
+            !DefinedAsCalculation(callerText, word) &&
             !labels.Any(label => word.Equals(label, StringComparison.OrdinalIgnoreCase) || Mentions(word, label)) &&
             !properties.Contains(word, StringComparer.OrdinalIgnoreCase) &&
             !MatchesStored(word, stored)).ToArray();
@@ -189,6 +190,8 @@ public sealed class QueryWorkbench(
             await SchemaLabelsAsync(cancellationToken));
         if (future is not null)
             return future;
+        if (OnlyDefinedCalculations(callerText))
+            return "Commit and subscribe in this turn. A word the caller defines with means, or as a number or expression, is a calculation. Write that calculation with the properties the caller named. Do not ask which field that word is.";
         if (!await CommitDueAsync(callerText, cancellationToken))
             return null;
         var named = UniqueNamedFilters(callerText, await StoredByPropertyAsync(cancellationToken));
@@ -439,6 +442,30 @@ public sealed class QueryWorkbench(
         return chosen;
     }
 
+    internal static bool DefinedAsCalculation(string callerText, string word)
+    {
+        if (Regex.IsMatch(
+            callerText,
+            $@"\b{Regex.Escape(word)}\s+is\s+(?:\d|\()",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return true;
+        var means = Regex.Match(
+            callerText,
+            $@"\b{Regex.Escape(word)}\s+means\b(?<rest>.{{0,180}})",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!means.Success)
+            return false;
+        var rest = means.Groups["rest"].Value;
+        return Regex.IsMatch(rest, @"\d", RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(rest, @"\b(plus|minus|times|divided|average|sum|round)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    internal static bool OnlyDefinedCalculations(string callerText)
+    {
+        var complements = IsComplements(callerText);
+        return complements.Length > 0 && complements.All(word => DefinedAsCalculation(callerText, word));
+    }
+
     internal static bool IsNumericComparison(string callerText, int at, string complement) =>
         ComparisonWords.Contains(complement) &&
         Regex.IsMatch(callerText[at..], @"\d", RegexOptions.CultureInvariant);
@@ -484,7 +511,7 @@ public sealed class QueryWorkbench(
         {
             var subject = match.Groups[1].Success ? match.Groups[1].Value : null;
             var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
-            if (Stopwords.Contains(complement) || Covers(tokens, complement) || IsNumericComparison(callerText, match.Index, complement))
+            if (Stopwords.Contains(complement) || Covers(tokens, complement) || IsNumericComparison(callerText, match.Index, complement) || DefinedAsCalculation(callerText, complement))
                 continue;
             var place = Regex.Match(
                 callerText[match.Index..],

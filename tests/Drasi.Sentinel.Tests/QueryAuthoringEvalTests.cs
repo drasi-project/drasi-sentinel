@@ -232,6 +232,7 @@ public sealed class QueryAuthoringEvalTests
             "comparison word before a number",
             "asks to collect values",
             "future value of that property",
+            "defines with means",
         })
         {
             Assert.Contains(rule, enabled, StringComparison.Ordinal);
@@ -680,6 +681,11 @@ public sealed class QueryAuthoringEvalTests
         Assert.DoesNotContain("under", QueryWorkbench.UncoveredConditions("Tell me when the reading is under 9.", ""));
         Assert.DoesNotContain("greater", QueryWorkbench.UncoveredConditions("Tell me when the reading is greater than 9.", ""));
         Assert.Contains("missing", QueryWorkbench.UncoveredConditions("Tell me when the widget is missing.", ""));
+        var defined = "Tell me when the bay score is harsh. A bay score is 10 plus (load - 3). Harsh means that score is below 4 or above 9.";
+        Assert.DoesNotContain("harsh", QueryWorkbench.UncoveredConditions(defined, "MATCH (n:bays) RETURN n.id"));
+        Assert.DoesNotContain("score", QueryWorkbench.UncoveredConditions(defined, "MATCH (n:bays) RETURN n.id"));
+        Assert.True(QueryWorkbench.OnlyDefinedCalculations(defined));
+        Assert.False(QueryWorkbench.OnlyDefinedCalculations("Tell me when the widget is missing."));
 
         var runtime = new RecordingRuntime
         {
