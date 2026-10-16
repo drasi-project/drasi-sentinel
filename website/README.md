@@ -1,9 +1,12 @@
 # Drasi Sentinel documentation site
 
 This directory is the source for the
-[Drasi Sentinel documentation site](https://drasi-project.github.io/drasi-sentinel/).
-Hugo and the Docsy theme build it. GitHub Pages publishes it from `main` via
-[`.github/workflows/website.yml`](../.github/workflows/website.yml).
+[Drasi Sentinel documentation site](https://supreme-guacamole-w9j9wne.pages.github.io/).
+Hugo and the Docsy theme build it. The repository is private, so Pages serves
+the site from the `gh-pages` branch at that host. A public repository would
+use `https://drasi-project.github.io/drasi-sentinel/`. The Actions workflow
+that matches drasi-dotnet is local commit `c3a2053`. This token cannot push
+`.github/workflows/website.yml`.
 
 The site uses the same Docsy pin and brand styles as
 [drasi-project/drasi-dotnet](https://github.com/drasi-project/drasi-dotnet/tree/main/website).
@@ -40,7 +43,7 @@ npm --prefix themes/docsy install
 hugo server
 ```
 
-The preview is at `http://localhost:1313/drasi-sentinel/`.
+The preview is at `http://localhost:1313/`.
 
 A production build writes `website/public/`:
 
@@ -52,7 +55,7 @@ hugo --gc --minify
 
 Put Markdown under `content/docs/`. A section uses `_index.md`. Set `weight`
 to order the sidebar. Lowest comes first. Use relative links so they resolve
-under `/drasi-sentinel/` on GitHub Pages.
+on the Pages host.
 
 ```yaml
 ---
@@ -66,6 +69,10 @@ description: >
 
 ## Publish
 
-Pushes to `main` that touch `website/` or the workflow file build the site
-and deploy it. Pull requests build only. In the repository settings, set
-Pages to GitHub Actions. `actions/configure-pages` supplies the base URL.
+Pages is set to the `gh-pages` branch. Rebuild with the Pages base URL before
+updating that branch. The local preview is `hugo server`.
+
+The Actions workflow in local commit `c3a2053` is the drasi-dotnet publisher.
+It builds on pull requests and deploys from `main`. Pushing it needs a token
+with the `workflow` scope. After that file is on `main`, set Pages to GitHub
+Actions. `actions/configure-pages` supplies the base URL.

@@ -3,7 +3,10 @@
 # This mirrors the Drasi .NET library site (Hugo + Docsy). It is published to
 # GitHub Pages by .github/workflows/website.yml.
 
-baseURL = "https://drasi-project.github.io/drasi-sentinel/"
+# Private Pages currently serves the site at the host below. A public
+# repository would use https://drasi-project.github.io/drasi-sentinel/.
+# The Actions workflow overrides this with the Pages base URL.
+baseURL = "https://supreme-guacamole-w9j9wne.pages.github.io/"
 title = "Drasi Sentinel Docs"
 theme = "docsy"
 
