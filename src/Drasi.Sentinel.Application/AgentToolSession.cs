@@ -92,6 +92,8 @@ public sealed class AgentToolSession : IAgentTools
 
     public bool Subscribed { get; private set; }
 
+    public bool TtlRequired { get; private set; }
+
     public string? CorrectableSkip { get; private set; }
 
     public string? NarrowerQuery { get; private set; }
@@ -350,11 +352,16 @@ public sealed class AgentToolSession : IAgentTools
         ExpiresAt = subscription.Expires.Instant,
     };
 
-    private string Rejected(string code, string message) => JsonSerializer.Serialize(new
+    private string Rejected(string code, string message)
     {
-        Kind = AgentTurn.ToolRejectedKind,
-        Code = code,
-        Message = message,
-        Next = AgentTurn.Recovery(code, _workbench is not null),
-    }, Json);
+        if (code == "ttl_required")
+            TtlRequired = true;
+        return JsonSerializer.Serialize(new
+        {
+            Kind = AgentTurn.ToolRejectedKind,
+            Code = code,
+            Message = message,
+            Next = AgentTurn.Recovery(code, _workbench is not null),
+        }, Json);
+    }
 }

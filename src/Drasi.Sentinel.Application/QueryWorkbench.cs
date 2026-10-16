@@ -182,6 +182,13 @@ public sealed class QueryWorkbench(
             return follow.Instruction;
         if (HasNumericComparison(callerText) && IsComplements(callerText).Length == 0)
             return "Commit and subscribe in this turn. A comparison word before a number is a numeric comparison. Write the operator and that number. Do not ask which stored value that word is.";
+        var future = FutureValueOnNamedProperty(
+            callerText,
+            await PropertyNamesAsync(cancellationToken),
+            await StoredByPropertyAsync(cancellationToken),
+            await SchemaLabelsAsync(cancellationToken));
+        if (future is not null)
+            return future;
         if (!await CommitDueAsync(callerText, cancellationToken))
             return null;
         var named = UniqueNamedFilters(callerText, await StoredByPropertyAsync(cancellationToken));
@@ -216,6 +223,34 @@ public sealed class QueryWorkbench(
     }
 
     public static IReadOnlyList<string> ComplementWords(string callerText) => IsComplements(callerText);
+
+    internal static string? FutureValueOnNamedProperty(
+        string callerText,
+        IReadOnlyList<string> properties,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> stored,
+        IReadOnlyList<string> labels)
+    {
+        var complements = IsComplements(callerText);
+        if (complements.Length != 1)
+            return null;
+        var word = complements[0];
+        if (labels.Any(label => label.Equals(word, StringComparison.OrdinalIgnoreCase)))
+            return null;
+        var samples = stored.Values.SelectMany(values => values).ToArray();
+        if (samples.Any(value =>
+            value.Equals(word, StringComparison.OrdinalIgnoreCase) ||
+            value.StartsWith(word, StringComparison.OrdinalIgnoreCase)))
+            return null;
+        var named = properties
+            .Where(property => WholeWord(callerText, property))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (named.Length != 1)
+            return null;
+        return "Commit and subscribe in this turn. Compare " + named[0] + " to '" + word +
+            "'. Write " + named[0] + " = '" + word +
+            "'. That word is not a stored value. It is the future value of that property. Do not ask which field it is.";
+    }
 
     private async Task<JoinFollowUp> FollowUpAsync(string callerText, CancellationToken cancellationToken)
     {

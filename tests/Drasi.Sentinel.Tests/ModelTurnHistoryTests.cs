@@ -111,6 +111,9 @@ public sealed class ModelTurnHistoryTests
             Assert.Contains(phrase, text);
         }
 
+        Assert.Contains("until subscribe_to_changes returns ttl_required", text);
+        Assert.Contains("If no catalog query covers the request", text);
+        Assert.DoesNotContain("ask once and call no tools", text);
         Assert.Contains("The host binds the reaction", AgentTurn.SubscribeToolDescription);
         Assert.DoesNotContain("same turn", AgentTurn.SubscribeToolDescription, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("same turn", AgentTurn.CurrentResultsToolDescription, StringComparison.OrdinalIgnoreCase);
@@ -118,6 +121,64 @@ public sealed class ModelTurnHistoryTests
         Assert.DoesNotContain("paid", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("overdue", text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("acct-100", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Premature_lifetime_question_is_not_published()
+    {
+        var calls = 0;
+        string? continuation = null;
+        var responder = new CatalogAgentResponder(Catalog(), UnusedSubscriptions(), new RecordingModel(messages =>
+        {
+            calls++;
+            if (calls == 1)
+                return "What TTL should I use?";
+            continuation = messages[^1].Text;
+            return "No catalog query covers that request.";
+        }));
+
+        var response = await responder.RespondAsync(
+            Principal(),
+            new("task", "message"),
+            "tell me when a beacon arrives",
+            [],
+            CancellationToken.None);
+
+        Assert.Equal("No catalog query covers that request.", response);
+        Assert.Equal(2, calls);
+        Assert.NotNull(continuation);
+        Assert.Contains("ttl_required", continuation, StringComparison.Ordinal);
+        Assert.Contains("say that and stop", continuation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repeated_lifetime_question_does_not_claim_a_watch()
+    {
+        var responder = new CatalogAgentResponder(Catalog(), UnusedSubscriptions(), new RecordingModel(_ =>
+            "How long to keep it active?"));
+
+        var response = await responder.RespondAsync(
+            Principal(),
+            new("task", "message"),
+            "tell me when a beacon arrives",
+            [],
+            CancellationToken.None);
+
+        Assert.Equal(AgentTurn.UnstartedWatch, response);
+    }
+
+    [Fact]
+    public void Lifetime_question_after_ttl_required_is_kept()
+    {
+        Assert.Null(AgentTurn.PrematureLifetime("What TTL should I use?", ttlRequired: true, authoring: false));
+    }
+
+    [Fact]
+    public void Identical_reply_text_is_stored_once()
+    {
+        Assert.Equal("Noted.", ModelReply.SingleCopy("Noted.\nNoted."));
+        Assert.Equal("Noted.", ModelReply.SingleCopy("Noted.\n\nNoted."));
+        Assert.Equal("one\ntwo", ModelReply.SingleCopy("one\ntwo"));
     }
 
     [Fact]

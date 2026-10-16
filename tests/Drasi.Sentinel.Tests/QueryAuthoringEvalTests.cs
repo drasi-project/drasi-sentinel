@@ -158,6 +158,41 @@ public sealed class QueryAuthoringEvalTests
     }
 
     [Fact]
+    public void A_value_missing_from_samples_on_one_named_property_is_a_future_value()
+    {
+        var stored = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["shade"] = ["ink", "mist"],
+            ["rank"] = ["low"],
+        };
+        var properties = new[] { "shade", "rank" };
+        var labels = new[] { "lamps" };
+
+        var named = QueryWorkbench.FutureValueOnNamedProperty(
+            "Tell me when the shade is amber. Keep the watch for 1 hour.",
+            properties,
+            stored,
+            labels);
+        Assert.Contains("shade = 'amber'", named, StringComparison.Ordinal);
+
+        Assert.Null(QueryWorkbench.FutureValueOnNamedProperty(
+            "Tell me when the shade is ink. Keep the watch for 1 hour.",
+            properties,
+            stored,
+            labels));
+        Assert.Null(QueryWorkbench.FutureValueOnNamedProperty(
+            "Tell me when the line is blocked. Keep the watch for 1 hour.",
+            properties,
+            stored,
+            labels));
+        Assert.Null(QueryWorkbench.FutureValueOnNamedProperty(
+            "Tell me when the shade is nort. Keep the watch for 1 hour.",
+            ["shade"],
+            new Dictionary<string, IReadOnlyList<string>> { ["shade"] = ["North", "Northeast"] },
+            labels));
+    }
+
+    [Fact]
     public void Skill_states_the_rules_the_eval_depends_on_only_when_authoring_is_enabled()
     {
         var catalog = Catalog();
@@ -196,6 +231,7 @@ public sealed class QueryAuthoringEvalTests
             "more than one stored value",
             "comparison word before a number",
             "asks to collect values",
+            "future value of that property",
         })
         {
             Assert.Contains(rule, enabled, StringComparison.Ordinal);

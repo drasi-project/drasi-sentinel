@@ -41,7 +41,7 @@ internal sealed class AzureOpenAiLanguageModel : ILanguageModel, IDisposable
 #pragma warning restore OPENAI001
         try
         {
-            return (await agent.RunAsync(ToChat(messages), session: null, options: null, cancellationToken)).ToString();
+            return ModelReply.SingleCopy((await agent.RunAsync(ToChat(messages), session: null, options: null, cancellationToken)).ToString());
         }
         catch (AuthenticationFailedException exception)
         {
