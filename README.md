@@ -1,5 +1,8 @@
 # Drasi Sentinel for .NET
 
+User-facing documentation is in [`website/`](website/README.md) and publishes
+to [drasi-project.github.io/drasi-sentinel](https://drasi-project.github.io/drasi-sentinel/).
+
 Sentinel is a governed A2A change-detection agent. Callers describe a supported
 change in natural language. The bounded agent selects a curated query/reaction
 pair, creates an active task-owned subscription, and reports later observations
