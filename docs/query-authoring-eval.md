@@ -76,3 +76,19 @@ If the miss can be scored without a model, add a fact to `QueryAuthoringEvalTest
 Put a host-only rule in `QueryAuthoringHierarchyTests` when the script does not need to run it. To make the script run that class, add the class name to the `--filter` in `tests/query-authoring-eval.sh`.
 
 If the miss is a tool sequence the host cannot see, copy `Configured_model_authors_a_cross_source_join`. Change the user text and the assertion. Share the graph with the fixtures through `QueryAuthoringEvalSupport`. Keep the `SENTINEL_QUERY_EVAL` gate. Do not add a model call to the default `dotnet test` run.
+
+## Query language suite
+
+`QueryLanguageModelEval` adds 50 scenarios on a synthetic `pumps` / `gauges` graph. It does not use the demo nouns. `Language_suite_lists_fifty_distinct_scenarios` counts them without calling a model.
+
+The scenarios score the continuous-query rules in the [Drasi query language](https://github.com/drasi-project/docs/blob/main/docs/content/reference/query-language/_index.md) and the checks in `QueryText` and `QueryAuthoring`: Cypher rather than SQL, exact stored values, `drasi.trueFor` versus watch lifetime, aggregations, `floor` and `CASE` only when asked, synthetic joins when the schema reports no relationship, numeric comparisons, and a second watch that must not reuse a narrower query.
+
+```bash
+export SENTINEL_QUERY_EVAL=1
+export AZURE_OPENAI_ENDPOINT='https://your-resource.openai.azure.com/'
+export AZURE_OPENAI_MODEL='your-deployment'
+export SENTINEL_QUERY_LANGUAGE_EVAL=1
+./tests/query-authoring-eval.sh
+```
+
+`SENTINEL_QUERY_EVAL_ONLY` is a comma-separated scenario name list. `SENTINEL_QUERY_EVAL_LIMIT` runs only the first N selected scenarios.

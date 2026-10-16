@@ -229,6 +229,12 @@ public sealed class AgentToolSession : IAgentTools
             return;
         }
 
+        if (skipped.Contains("Commit again", StringComparison.Ordinal))
+        {
+            CorrectableSkip = skipped;
+            return;
+        }
+
         var quoted = Regex.Matches(skipped, "'([^']+)'")
             .Select(match => match.Groups[1].Value)
             .Where(value => value.Length > 0)

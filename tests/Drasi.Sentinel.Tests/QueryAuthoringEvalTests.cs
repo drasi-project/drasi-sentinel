@@ -193,6 +193,9 @@ public sealed class QueryAuthoringEvalTests
             "already named",
             "join key",
             "did not name",
+            "more than one stored value",
+            "comparison word before a number",
+            "asks to collect values",
         })
         {
             Assert.Contains(rule, enabled, StringComparison.Ordinal);
@@ -633,6 +636,61 @@ public sealed class QueryAuthoringEvalTests
         Assert.False(await workbench.CommitDueAsync(
             "Tell me when the shipment is waiting and the truck is at the dock.",
             CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Comparison_and_ambiguous_prefix_are_not_guessed_mappings()
+    {
+        Assert.DoesNotContain("under", QueryWorkbench.UncoveredConditions("Tell me when the reading is under 9.", ""));
+        Assert.DoesNotContain("greater", QueryWorkbench.UncoveredConditions("Tell me when the reading is greater than 9.", ""));
+        Assert.Contains("missing", QueryWorkbench.UncoveredConditions("Tell me when the widget is missing.", ""));
+
+        var runtime = new RecordingRuntime
+        {
+            Graph = new SourceGraph(
+                [new GraphNode("batches", [new GraphProperty("id", "string"), new GraphProperty("tint", "string")], ["ledger"])],
+                [],
+                []),
+        };
+        runtime.Schemas["ledger"] = JsonNode.Parse("""{"nodes":[{"label":"batches","properties":[{"name":"id"},{"name":"tint"}]}],"relations":[]}""");
+        runtime.LabelSamples["batches"] =
+        [
+            JsonNode.Parse("""{"id":"B1","tint":"Amber"}""")!,
+            JsonNode.Parse("""{"id":"B2","tint":"Ambergris"}""")!,
+        ];
+        var sources = new HashSet<string>(["ledger"], StringComparer.Ordinal);
+        var authoring = new QueryAuthoring(runtime, new InMemoryAuthoredQueryStore(), new LiveCatalog(QueryAuthoringEvalSupport.Catalog()), sources, new ReactionId("notify"));
+        var guessed = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:batches) WHERE n.tint = 'Amber' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "tint-watch",
+            ["description"] = "A tint watch.",
+            ["caller_text"] = "Tell me when a batch is at the amber. Keep the watch for 1 hour.",
+        }, CancellationToken.None);
+        Assert.Contains("more than one stored value", guessed, StringComparison.Ordinal);
+        Assert.Contains("uncovered words", guessed, StringComparison.Ordinal);
+        Assert.DoesNotContain("Committed", guessed, StringComparison.Ordinal);
+
+        var named = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:batches) WHERE n.tint = 'Amber' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "tint-watch",
+            ["description"] = "A tint watch.",
+            ["caller_text"] = "Tell me when a batch is at the amber. Keep the watch for 1 hour.\nAmber",
+        }, CancellationToken.None);
+        Assert.DoesNotContain("more than one stored value", named, StringComparison.Ordinal);
+
+        var stated = await authoring.AttemptJsonAsync(new Dictionary<string, string?>
+        {
+            ["query"] = "MATCH (n:batches) WHERE n.tint = 'Amber' RETURN n.id AS id",
+            ["sources"] = "ledger",
+            ["commit_as"] = "tint-stated",
+            ["description"] = "A tint watch.",
+            ["caller_text"] = "Tell me when a batch tint is Amber. Keep the watch for 2 hours.",
+        }, CancellationToken.None);
+        Assert.DoesNotContain("more than one stored value", stated, StringComparison.Ordinal);
     }
 
     private static Dictionary<string, string?> Commit(string id, string query, string description, string? callerText = null) => new()

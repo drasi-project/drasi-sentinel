@@ -180,6 +180,8 @@ public sealed class QueryWorkbench(
         var follow = await FollowUpAsync(callerText, cancellationToken);
         if (follow.Instruction is not null)
             return follow.Instruction;
+        if (HasNumericComparison(callerText) && IsComplements(callerText).Length == 0)
+            return "Commit and subscribe in this turn. A comparison word before a number is a numeric comparison. Write the operator and that number. Do not ask which stored value that word is.";
         if (!await CommitDueAsync(callerText, cancellationToken))
             return null;
         var named = UniqueNamedFilters(callerText, await StoredByPropertyAsync(cancellationToken));
@@ -357,7 +359,7 @@ public sealed class QueryWorkbench(
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
         {
             var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
-            if (!Stopwords.Contains(complement))
+            if (!Stopwords.Contains(complement) && !IsNumericComparison(callerText, match.Index, complement))
                 words.Add(complement);
         }
 
@@ -402,6 +404,23 @@ public sealed class QueryWorkbench(
         return chosen;
     }
 
+    internal static bool IsNumericComparison(string callerText, int at, string complement) =>
+        ComparisonWords.Contains(complement) &&
+        Regex.IsMatch(callerText[at..], @"\d", RegexOptions.CultureInvariant);
+
+    private static bool HasNumericComparison(string callerText) =>
+        Regex.Matches(
+            callerText,
+            @"\b([A-Za-z]{4,})\s+is\s+(?:still\s+)?(?:being\s+)?([A-Za-z]{4,})\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .Any(match => IsNumericComparison(callerText, match.Index, match.Groups[2].Value));
+
+    private static readonly HashSet<string> ComparisonWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "greater", "less", "under", "over", "above", "below", "more", "fewer", "higher", "lower",
+    };
+
     private static bool MatchesStored(string word, IReadOnlyList<string> values) =>
         values.Any(value => value.Equals(word, StringComparison.OrdinalIgnoreCase)) ||
         (word.Length >= 4 && values.Count(value => value.Contains(word, StringComparison.OrdinalIgnoreCase)) == 1);
@@ -430,7 +449,7 @@ public sealed class QueryWorkbench(
         {
             var subject = match.Groups[1].Success ? match.Groups[1].Value : null;
             var complement = match.Groups[2].Success ? match.Groups[2].Value : match.Groups[3].Value;
-            if (Stopwords.Contains(complement) || Covers(tokens, complement))
+            if (Stopwords.Contains(complement) || Covers(tokens, complement) || IsNumericComparison(callerText, match.Index, complement))
                 continue;
             var place = Regex.Match(
                 callerText[match.Index..],

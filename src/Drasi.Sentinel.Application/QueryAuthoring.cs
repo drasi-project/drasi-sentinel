@@ -457,6 +457,8 @@ public sealed class QueryAuthoring(
             return (literalSkip, null);
         if (AggregationOnly(query, callerText) is { } aggregation)
             return (aggregation, null);
+        if (MissingCollect(query, callerText) is { } collect)
+            return (collect, null);
         if (MappingSkip(query, description, callerText) is { } mappingSkip)
             return (mappingSkip, null);
         if (projectionSkip is not null)
@@ -750,10 +752,31 @@ public sealed class QueryAuthoring(
         }
 
         var labels = samples.Keys.ToArray();
-        foreach (var example in samples.Values.SelectMany(properties => properties.Values).SelectMany(values => values).Distinct(StringComparer.Ordinal))
+        var storedValues = samples.Values.SelectMany(properties => properties.Values).SelectMany(values => values).Distinct(StringComparer.Ordinal).ToArray();
+        foreach (var example in storedValues)
         {
-            if (NamesStoredValue(callerText, example, labels) && !query.Contains($"'{example}'", StringComparison.Ordinal))
+            if (NamesStoredValue(callerText, example, labels, storedValues) && !query.Contains($"'{example}'", StringComparison.Ordinal))
                 named.Add(example);
+        }
+
+        if (!string.IsNullOrWhiteSpace(callerText))
+        {
+            foreach (Match word in Regex.Matches(callerText, @"\b[A-Za-z][A-Za-z0-9]{3,}\b"))
+            {
+                var prefixed = storedValues.Where(value => TokenMatches(word.Value, value)).ToArray();
+                if (prefixed.Length < 2)
+                    continue;
+                var latest = callerText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[^1];
+                var chosen = prefixed.Where(value =>
+                    latest.Equals(value, StringComparison.OrdinalIgnoreCase) ||
+                    Regex.IsMatch(callerText, $@"\bis\s+{Regex.Escape(value)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)).ToArray();
+                if (chosen.Length == 1 &&
+                    prefixed.Where(value => query.Contains("'" + value + "'", StringComparison.Ordinal))
+                        .All(value => value.Equals(chosen[0], StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                if (prefixed.Any(value => query.Contains("'" + value + "'", StringComparison.Ordinal)))
+                    problems.Add($"'{word.Value}' names more than one stored value: {string.Join(", ", prefixed)}. These are uncovered words. Ask which stored value. Do not pick one.");
+            }
         }
 
         if (named.Count > 0)
@@ -834,7 +857,7 @@ public sealed class QueryAuthoring(
     private static string? AggregationOnly(string query, string? callerText)
     {
         if (string.IsNullOrWhiteSpace(callerText) ||
-            Regex.IsMatch(callerText, @"\b(count|how many|number of|total|average|avg|mean|minimum|maximum)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            Regex.IsMatch(callerText, @"\b(count|how many|number of|total|average|avg|mean|minimum|maximum|collect|collected)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
             return null;
         var returns = Regex.Match(query, @"\bRETURN\b(?<projection>.+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         if (!returns.Success)
@@ -847,7 +870,16 @@ public sealed class QueryAuthoring(
             : null;
     }
 
-    private static bool NamesStoredValue(string? text, string example, IReadOnlyCollection<string> labels)
+    private static string? MissingCollect(string query, string? callerText)
+    {
+        if (string.IsNullOrWhiteSpace(callerText) ||
+            !Regex.IsMatch(callerText, @"\bcollect\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(query, @"\bcollect\s*\(", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+            return null;
+        return "The caller asked to collect values. RETURN collect of the identity. That is a requested aggregation, not a row watch. Commit again in this turn.";
+    }
+
+    private static bool NamesStoredValue(string? text, string example, IReadOnlyCollection<string> labels, IReadOnlyCollection<string> examples)
     {
         if (string.IsNullOrWhiteSpace(text))
             return false;
@@ -857,12 +889,18 @@ public sealed class QueryAuthoring(
         {
             if (IsLabelWord(word.Value, labels))
                 continue;
-            if (example.StartsWith(word.Value, StringComparison.OrdinalIgnoreCase) && example.Length > word.Value.Length)
+            if (!TokenMatches(word.Value, example))
+                continue;
+            if (examples.Count(value => TokenMatches(word.Value, value)) == 1)
                 return true;
         }
 
         return false;
     }
+
+    private static bool TokenMatches(string word, string value) =>
+        value.Equals(word, StringComparison.OrdinalIgnoreCase) ||
+        (value.StartsWith(word, StringComparison.OrdinalIgnoreCase) && value.Length > word.Length);
 
     private static bool IsLabelWord(string word, IReadOnlyCollection<string> labels)
     {
