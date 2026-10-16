@@ -135,6 +135,63 @@ public sealed class A2aProtocolInvariantTests
     }
 
     [Fact]
+    public void Idle_sse_comment_interval_stays_under_a_thirty_second_proxy_timeout()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(15), SseTaskResult.IdleCommentInterval);
+    }
+
+    [Fact]
+    public async Task Idle_sse_stream_sends_comments_and_then_the_next_event()
+    {
+        var repository = new InMemorySentinelRepository();
+        var notifier = new TaskEventNotifier();
+        var principal = new Principal(new("tenant"), new("owner"));
+        var taskId = new ConversationTaskId("task");
+        await repository.GetOrCreateTaskAsync(principal, taskId, CancellationToken.None);
+
+        using var requestIdDocument = JsonDocument.Parse("1");
+        using var abort = new CancellationTokenSource();
+        var body = new LockedBody();
+        var context = new DefaultHttpContext();
+        context.RequestAborted = abort.Token;
+        context.Response.Body = body;
+        var running = new SseTaskResult(
+            requestIdDocument.RootElement.Clone(),
+            principal,
+            taskId,
+            new Reader(repository),
+            notifier,
+            0,
+            heartbeatInterval: TimeSpan.FromMilliseconds(20)).ExecuteAsync(context);
+
+        try
+        {
+            await WaitUntilAsync(() => body.Text().Split(": ping\n\n").Length - 1 >= 2);
+            Assert.False(running.IsCompleted);
+            Assert.DoesNotContain("id:", body.Text(), StringComparison.Ordinal);
+            Assert.DoesNotContain("data:", body.Text(), StringComparison.Ordinal);
+
+            await repository.AppendEventAsync(
+                principal.Owner,
+                new(taskId, default, ConversationEventKind.Observation, null, ObservationJson(), DateTimeOffset.UtcNow),
+                CancellationToken.None);
+            notifier.Notify(taskId);
+
+            await WaitUntilAsync(() => body.Text().Contains("id: 1", StringComparison.Ordinal));
+            var delivered = body.Text();
+            Assert.Contains(": ping\n\n", delivered, StringComparison.Ordinal);
+            Assert.Contains("native_query_diff", delivered, StringComparison.Ordinal);
+            Assert.False(running.IsCompleted);
+        }
+        finally
+        {
+            abort.Cancel();
+            try { await running; }
+            catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
     public async Task Sse_replay_continues_past_a_terminal_event_that_is_not_latest()
     {
         var principal = new Principal(new("tenant"), new("owner"));
@@ -177,6 +234,40 @@ public sealed class A2aProtocolInvariantTests
         public Task<IReadOnlyList<ConversationEvent>> ReadEventsAsync(Principal principal, ConversationTaskId taskId, TaskEventSequence after, int limit, CancellationToken cancellationToken) =>
             Task.FromResult(read().Where(item => item.Sequence.Value > after.Value).Take(limit).ToArray() as IReadOnlyList<ConversationEvent>);
         public Task RestoreWatchesAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> ready)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!ready())
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            await Task.Delay(10, timeout.Token);
+        }
+    }
+
+    private sealed class LockedBody : MemoryStream
+    {
+        private readonly object _gate = new();
+
+        public string Text()
+        {
+            lock (_gate)
+                return Encoding.UTF8.GetString(ToArray());
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            lock (_gate)
+                base.Write(buffer, offset, count);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            lock (_gate)
+                base.Write(buffer.Span);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class Reader(IConversationRepository repository) : IConversationSubscriptions

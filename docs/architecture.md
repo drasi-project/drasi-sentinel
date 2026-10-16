@@ -35,7 +35,10 @@ that task, not the host, and the model does not choose it.
 The Host maps journal entries to JSON-RPC SSE events for
 `SendStreamingMessage` and `SubscribeToTask`. Readers replay entries after
 `Last-Event-ID` before waiting for the notifier and always re-read durable
-storage after waking. Native diff artifacts become A2A data parts, while
+storage after waking. While the stream waits, the host writes an SSE comment
+at least every 15 seconds. The comment is not a journal entry and has no id.
+A client must not impose a read timeout, so a watch can stay open for hours
+or days. Native diff artifacts become A2A data parts, while
 protocol status messages remain text. Current-result artifacts use the same
 A2A data-part projection. A2A transport code does not leak into application or
 native code.

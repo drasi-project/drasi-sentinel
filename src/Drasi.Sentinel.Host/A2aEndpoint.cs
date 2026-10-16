@@ -272,8 +272,12 @@ internal sealed class SseTaskResult(
     IConversationSubscriptions subscriptions,
     ITaskEventNotifier notifier,
     long after,
-    bool usesStandardV1 = false) : IResult
+    bool usesStandardV1 = false,
+    TimeSpan? heartbeatInterval = null) : IResult
 {
+    internal static readonly TimeSpan IdleCommentInterval = TimeSpan.FromSeconds(15);
+    private const string IdleComment = ": ping\n\n";
+
     public async Task ExecuteAsync(HttpContext context)
     {
         context.Response.StatusCode = StatusCodes.Status200OK;
@@ -282,6 +286,7 @@ internal sealed class SseTaskResult(
         context.Response.Headers.Connection = "keep-alive";
         var cursor = new TaskEventSequence(after);
         var observed = notifier.Observe(taskId);
+        var interval = heartbeatInterval ?? IdleCommentInterval;
         while (!context.RequestAborted.IsCancellationRequested)
         {
             var events = await subscriptions.ReadEventsAsync(principal, taskId, cursor, 100, context.RequestAborted);
@@ -306,9 +311,46 @@ internal sealed class SseTaskResult(
                     return;
                 continue;
             }
-            await notifier.WaitAsync(taskId, observed, context.RequestAborted);
+            await WaitForNextEventAsync(context, observed, interval);
             observed = notifier.Observe(taskId);
         }
+    }
+
+    private async Task WaitForNextEventAsync(HttpContext context, long observed, TimeSpan interval)
+    {
+        var cancellation = context.RequestAborted;
+        var wait = notifier.WaitAsync(taskId, observed, cancellation);
+        try
+        {
+            while (!wait.IsCompleted && !cancellation.IsCancellationRequested)
+            {
+                await context.Response.WriteAsync(IdleComment, cancellation);
+                await context.Response.Body.FlushAsync(cancellation);
+                if (wait.IsCompleted || cancellation.IsCancellationRequested)
+                    break;
+                using var delayCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+                var delay = Task.Delay(interval, delayCancellation.Token);
+                var finished = await Task.WhenAny(wait, delay);
+                delayCancellation.Cancel();
+                try { await delay; }
+                catch (OperationCanceledException) { }
+                if (finished == wait || cancellation.IsCancellationRequested)
+                    break;
+            }
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            await ObserveCancellationAsync(wait);
+            throw;
+        }
+
+        await wait;
+    }
+
+    private static async Task ObserveCancellationAsync(Task wait)
+    {
+        try { await wait; }
+        catch (OperationCanceledException) { }
     }
 
     private object Project(ConversationEvent item)

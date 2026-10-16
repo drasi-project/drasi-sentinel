@@ -12,7 +12,10 @@ the request accepts no query, source, Cypher, or filter input.
 The JSON-RPC A2A interface supports `SendMessage` for Inspector v1
 compatibility and the standard SSE methods `SendStreamingMessage` and
 `SubscribeToTask`. Streaming responses use durable task-event sequence IDs as
-SSE IDs. Reconnect with `Last-Event-ID` to replay missed artifacts.
+SSE IDs. An idle stream stays open for the life of the watch. While it waits,
+the host writes an SSE comment at least every 15 seconds. A comment is not an
+event and has no id. Do not set a read timeout on that stream. Reconnect with
+`Last-Event-ID` to replay missed artifacts.
 
 ```bash
 dotnet test Drasi.Sentinel.slnx
