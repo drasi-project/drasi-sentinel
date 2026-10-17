@@ -2,11 +2,9 @@
 
 This directory is the source for the
 [Drasi Sentinel documentation site](https://supreme-guacamole-w9j9wne.pages.github.io/).
-Hugo and the Docsy theme build it. The repository is private, so Pages serves
-the site from the `gh-pages` branch at that host. A public repository would
-use `https://drasi-project.github.io/drasi-sentinel/`. The Actions workflow
-that matches drasi-dotnet is local commit `c3a2053`. This token cannot push
-`.github/workflows/website.yml`.
+Hugo and the Docsy theme build it. Pages is set to GitHub Actions. The
+repository is private, so the site is served at that host. A public repository
+would use `https://drasi-project.github.io/drasi-sentinel/`.
 
 The site uses the same Docsy pin and brand styles as
 [drasi-project/drasi-dotnet](https://github.com/drasi-project/drasi-dotnet/tree/main/website).
@@ -69,10 +67,7 @@ description: >
 
 ## Publish
 
-Pages is set to the `gh-pages` branch. Rebuild with the Pages base URL before
-updating that branch. The local preview is `hugo server`.
-
-The Actions workflow in local commit `c3a2053` is the drasi-dotnet publisher.
-It builds on pull requests and deploys from `main`. Pushing it needs a token
-with the `workflow` scope. After that file is on `main`, set Pages to GitHub
-Actions. `actions/configure-pages` supplies the base URL.
+[`.github/workflows/website.yml`](../.github/workflows/website.yml) builds this
+site and deploys it from `main`. Pull requests build only.
+`actions/configure-pages` supplies the base URL. The local preview is
+`hugo server`.

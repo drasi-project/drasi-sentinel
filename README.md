@@ -1,7 +1,7 @@
 # Drasi Sentinel for .NET
 
-User-facing documentation is in [`website/`](website/README.md). The repository
-is private, so GitHub Pages serves it at
+User-facing documentation is in [`website/`](website/README.md). GitHub Actions
+publishes it. The repository is private, so the site is at
 [supreme-guacamole-w9j9wne.pages.github.io](https://supreme-guacamole-w9j9wne.pages.github.io/).
 
 Sentinel is a governed A2A change-detection agent. Callers describe a supported
