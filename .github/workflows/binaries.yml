@@ -62,7 +62,7 @@ jobs:
             <packageSources>
               <clear />
               <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-              <add key="drasi-release" value="${PWD}/nupkgs" />
+              <add key="drasi-release" value="nupkgs" />
             </packageSources>
             <packageSourceMapping>
               <packageSource key="drasi-release">
