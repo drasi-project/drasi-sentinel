@@ -14,10 +14,6 @@ on this snapshot. The
 [edge release](https://github.com/drasi-project/drasi-sentinel/releases/tag/edge)
 is a later build from `main`, and it is also not stable.
 
-This repository is private. `gh release download` works when you are signed in
-to an account that can read it. You can also download the archive from the
-release page in a browser.
-
 ## Pick an archive
 
 | Machine | Archive |
@@ -27,9 +23,6 @@ release page in a browser.
 | macOS Apple silicon | `sentinel-osx-arm64.tar.gz` |
 | macOS Intel | `sentinel-osx-x64.tar.gz` |
 | Windows x64 | `sentinel-win-x64.zip` |
-
-There is no Windows arm64 build. The Drasi engine package does not include
-that native library.
 
 `SHA256SUMS` on the same release lists a SHA-256 for each archive.
 

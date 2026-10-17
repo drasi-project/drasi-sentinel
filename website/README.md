@@ -2,9 +2,7 @@
 
 This directory is the source for the
 [Drasi Sentinel documentation site](https://supreme-guacamole-w9j9wne.pages.github.io/).
-Hugo and the Docsy theme build it. Pages is set to GitHub Actions. The
-repository is private, so the site is served at that host. A public repository
-would use `https://drasi-project.github.io/drasi-sentinel/`.
+Hugo and the Docsy theme build it. Pages is set to GitHub Actions.
 
 The site uses the same Docsy pin and brand styles as
 [drasi-project/drasi-dotnet](https://github.com/drasi-project/drasi-dotnet/tree/main/website).

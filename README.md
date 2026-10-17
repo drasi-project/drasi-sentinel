@@ -1,7 +1,7 @@
 # Drasi Sentinel for .NET
 
 User-facing documentation is in [`website/`](website/README.md). GitHub Actions
-publishes it. The repository is private, so the site is at
+publishes it to
 [supreme-guacamole-w9j9wne.pages.github.io](https://supreme-guacamole-w9j9wne.pages.github.io/).
 The current alpha is [v0.1.0-alpha.1](https://github.com/drasi-project/drasi-sentinel/releases/tag/v0.1.0-alpha.1).
 Host binaries for that tag, and the moving [edge release](https://github.com/drasi-project/drasi-sentinel/releases/tag/edge), are on GitHub.
