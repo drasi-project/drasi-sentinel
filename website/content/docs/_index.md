@@ -14,6 +14,7 @@ on one task, and reports later observations on that task.
 
 ## Where to start
 
+- [Install the host](getting-started/install/) downloads a binary for Linux, macOS, or Windows.
 - [Getting started](getting-started/) runs the local accounting demo and shows one result diff.
 - [Concepts](concepts/) explains a watch, a subscription, and the three diff types.
 - [Guides](guides/) cover starting a watch, keeping the stream, current results, lifetime, and query authoring.

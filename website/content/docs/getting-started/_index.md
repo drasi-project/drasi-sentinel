@@ -10,9 +10,11 @@ This tutorial runs one curated watch. You will start the demo, ask for paid
 invoices, mark a seeded invoice paid, and read the JSON artifact. No query
 authoring is involved. That demo has one published query, and authoring is off.
 
+To run the host without this demo, [install the binary](install/).
+
 ## Prerequisites
 
-- .NET 8 or newer.
+- .NET 10 SDK. The [install page](install/) does not need it.
 - Docker, with port `5432` free.
 - `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` set to a model the host can call.
 

@@ -3,6 +3,7 @@
 User-facing documentation is in [`website/`](website/README.md). GitHub Actions
 publishes it. The repository is private, so the site is at
 [supreme-guacamole-w9j9wne.pages.github.io](https://supreme-guacamole-w9j9wne.pages.github.io/).
+Host binaries are on the [edge release](https://github.com/drasi-project/drasi-sentinel/releases/tag/edge).
 
 Sentinel is a governed A2A change-detection agent. Callers describe a supported
 change in natural language. The bounded agent selects a curated query/reaction

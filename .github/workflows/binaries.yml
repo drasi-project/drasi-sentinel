@@ -1,0 +1,186 @@
+# Build a self-contained Sentinel host for each platform the Drasi engine ships.
+#
+# The native library comes from the Drasi nupkg. That package has win-x64,
+# linux-x64, linux-arm64, osx-x64, and osx-arm64. There is no win-arm64 build.
+# osx-x64 is published on the Apple Silicon runner. The managed publish pulls
+# the x64 runtime and native library from the package.
+
+name: Binaries
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binaries-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    name: ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            rid: linux-x64
+          - runner: ubuntu-22.04-arm
+            rid: linux-arm64
+          - runner: macos-14
+            rid: osx-arm64
+          - runner: macos-14
+            rid: osx-x64
+          - runner: windows-latest
+            rid: win-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Pin the multi-RID Drasi package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/.*Include="Drasi" Version="\([^"]*\)".*/\1/p' src/Drasi.Sentinel.Application/Drasi.Sentinel.Application.csproj)
+          test -n "$version"
+          mkdir -p nupkgs
+          gh release download "v${version}" --repo drasi-project/drasi-dotnet --pattern "Drasi.${version}.nupkg" --dir nupkgs
+          cat > nuget.config <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              <add key="drasi-release" value="${PWD}/nupkgs" />
+            </packageSources>
+            <packageSourceMapping>
+              <packageSource key="drasi-release">
+                <package pattern="Drasi" />
+              </packageSource>
+              <packageSource key="nuget.org">
+                <package pattern="*" />
+              </packageSource>
+            </packageSourceMapping>
+          </configuration>
+          EOF
+
+      - name: Publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish src/Drasi.Sentinel.Host/Drasi.Sentinel.Host.csproj \
+            -c Release \
+            -r "${{ matrix.rid }}" \
+            --self-contained true \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -o publish
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          rid="${{ matrix.rid }}"
+          name="sentinel-${rid}"
+          mkdir -p "package/${name}" dist
+          cp -a publish/. "package/${name}/"
+          rm -f "package/${name}"/*.pdb
+          if [[ "$rid" == win-* ]]; then
+            test -f "package/${name}/Drasi.Sentinel.Host.exe"
+            test -f "package/${name}/drasi_ffi.dll"
+            mv "package/${name}/Drasi.Sentinel.Host.exe" "package/${name}/sentinel.exe"
+            powershell.exe -NoProfile -Command "Compress-Archive -Path 'package/${name}' -DestinationPath 'dist/${name}.zip' -Force"
+          else
+            case "$rid" in
+              linux-*) native="libdrasi_ffi.so" ;;
+              osx-*) native="libdrasi_ffi.dylib" ;;
+              *) echo "unknown rid ${rid}" >&2; exit 1 ;;
+            esac
+            test -f "package/${name}/Drasi.Sentinel.Host"
+            test -f "package/${name}/${native}"
+            mv "package/${name}/Drasi.Sentinel.Host" "package/${name}/sentinel"
+            chmod +x "package/${name}/sentinel"
+            tar -C package -czf "dist/${name}.tar.gz" "$name"
+          fi
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          rid="${{ matrix.rid }}"
+          dir="package/sentinel-${rid}"
+          if [[ "$rid" == "osx-x64" ]]; then
+            file "${dir}/sentinel" | grep -q x86_64
+            file "${dir}/libdrasi_ffi.dylib" | grep -q x86_64
+            if ! arch -x86_64 true >/dev/null 2>&1; then
+              echo "Rosetta is not available. The x64 binary was packaged but not executed."
+              exit 0
+            fi
+            out=$(arch -x86_64 "${dir}/sentinel" 2>&1 || true)
+          elif [[ "$rid" == win-* ]]; then
+            exe=$(cygpath -w "${dir}/sentinel.exe")
+            out=$(powershell.exe -NoProfile -Command "& '${exe}'" 2>&1 || true)
+          else
+            out=$("${dir}/sentinel" 2>&1 || true)
+          fi
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" | grep -q "Pass the manifest"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: sentinel-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum sentinel-* > SHA256SUMS
+          ls -lh
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+            title="$tag"
+            notes="Self-contained Sentinel host binaries."
+            flags=()
+          else
+            tag=edge
+            title="Edge"
+            notes="Moving build from main. The next push to main replaces these archives."
+            flags=(--prerelease)
+          fi
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$title" --notes "$notes" "${flags[@]}"
+          fi
+          gh release upload "$tag" dist/* --clobber

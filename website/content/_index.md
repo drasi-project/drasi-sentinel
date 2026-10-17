@@ -83,7 +83,7 @@ Sentinel fits a caller that needs a governed watch, not a private query string.
   <a href="docs/getting-started/" class="doc-card">
     <div class="doc-card__icon"><i class="fas fa-rocket"></i></div>
     <div class="doc-card__title">Getting started</div>
-    <div class="doc-card__desc">Run the accounting demo and see one paid-invoice diff.</div>
+    <div class="doc-card__desc">Install the host, or run the accounting demo and see one paid-invoice diff.</div>
   </a>
   <a href="docs/concepts/" class="doc-card">
     <div class="doc-card__icon"><i class="fas fa-lightbulb"></i></div>
