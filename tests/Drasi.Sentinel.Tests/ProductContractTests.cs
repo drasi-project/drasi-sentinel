@@ -63,6 +63,7 @@ public sealed class ProductContractTests
                 EmptyCatalog())));
 
         var root = card.RootElement;
+        Assert.Equal("0.1.0-alpha.1", root.GetProperty("version").GetString());
         Assert.True(root.GetProperty("capabilities").GetProperty("streaming").GetBoolean());
         Assert.True(root.GetProperty("capabilities").GetProperty("pushNotifications").GetBoolean());
         var binding = Assert.Single(root.GetProperty("supportedInterfaces").EnumerateArray());

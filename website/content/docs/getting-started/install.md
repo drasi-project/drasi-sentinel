@@ -7,9 +7,12 @@ description: >
 ---
 
 The host is a self-contained binary. You do not need the .NET SDK. The
+current alpha is
+[v0.1.0-alpha.1](https://github.com/drasi-project/drasi-sentinel/releases/tag/v0.1.0-alpha.1).
+It is not a stable release. The host contract can still change. That tag stays
+on this snapshot. The
 [edge release](https://github.com/drasi-project/drasi-sentinel/releases/tag/edge)
-is rebuilt from `main`. A version tag such as `v0.1.0` uses the same file names.
-Replace `edge` with that tag in the commands below.
+is a later build from `main`, and it is also not stable.
 
 This repository is private. `gh release download` works when you are signed in
 to an account that can read it. You can also download the archive from the
@@ -35,7 +38,7 @@ that native library.
 macOS Apple silicon:
 
 ```bash
-gh release download edge --repo drasi-project/drasi-sentinel --pattern sentinel-osx-arm64.tar.gz
+gh release download v0.1.0-alpha.1 --repo drasi-project/drasi-sentinel --pattern sentinel-osx-arm64.tar.gz
 tar -xzf sentinel-osx-arm64.tar.gz
 ```
 
@@ -45,7 +48,7 @@ the same way. Use the file name from the table.
 Windows:
 
 ```powershell
-gh release download edge --repo drasi-project/drasi-sentinel --pattern sentinel-win-x64.zip
+gh release download v0.1.0-alpha.1 --repo drasi-project/drasi-sentinel --pattern sentinel-win-x64.zip
 Expand-Archive sentinel-win-x64.zip -DestinationPath .
 ```
 

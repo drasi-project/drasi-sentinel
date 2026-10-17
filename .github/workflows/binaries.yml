@@ -10,7 +10,7 @@ name: Binaries
 on:
   push:
     branches: [main]
-    tags: ["v*.*.*"]
+    tags: ["v*.*.*", "v*.*.*-*"]
   pull_request:
   workflow_dispatch:
 
@@ -173,8 +173,13 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             tag="${GITHUB_REF_NAME}"
             title="$tag"
-            notes="Self-contained Sentinel host binaries."
-            flags=()
+            notes="Sentinel host ${tag}."
+            if [[ "$tag" == *-* ]]; then
+              notes="Prerelease ${tag}. The host contract can still change."
+              flags=(--prerelease)
+            else
+              flags=()
+            fi
           else
             tag=edge
             title="Edge"

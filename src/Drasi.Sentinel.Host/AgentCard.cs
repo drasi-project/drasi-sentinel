@@ -1,3 +1,4 @@
+using System.Reflection;
 using Drasi.Sentinel.Domain;
 
 namespace Drasi.Sentinel.Host;
@@ -41,7 +42,7 @@ public static class AgentCard
     {
         ["name"] = "Drasi Sentinel",
         ["description"] = queryAuthoring ? ConsumerContract + "\n\n" + AuthoringContract : ConsumerContract,
-        ["version"] = "0.1.0",
+        ["version"] = ProductVersion,
         ["protocolVersion"] = "1.0",
         ["supportedInterfaces"] = new[]
         {
@@ -126,6 +127,20 @@ public static class AgentCard
 
     private const string CurrentResultsDescription =
         "This is not a second watch. Send an example on the task a watch already opened. The reply is the current rows for that task's query. Follow the card description.";
+
+    private static string ProductVersion
+    {
+        get
+        {
+            var informational = typeof(AgentCard).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                ?.InformationalVersion;
+            if (string.IsNullOrWhiteSpace(informational))
+                return "0.1.0-alpha.1";
+            var plus = informational.IndexOf('+', StringComparison.Ordinal);
+            return plus < 0 ? informational : informational[..plus];
+        }
+    }
 
     private static string SkillName(string id)
     {
