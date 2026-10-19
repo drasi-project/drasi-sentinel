@@ -48,8 +48,35 @@ Expand-Archive sentinel-win-x64.zip -DestinationPath .
 
 ## Run
 
-Set the model endpoint, then pass the manifest path. This example is the
-macOS Apple silicon archive. Change the directory name for your archive.
+The binary does not configure itself. You pass it one YAML file, the
+manifest. That file names the sources to connect, whether
+`service.query_authoring.enabled` is true, and the queries to publish when
+authoring is off.
+Write that file before you set any variables. The fields are in the
+[manifest reference](../reference/manifest/). A complete file is the
+[accounting manifest](https://github.com/drasi-project/drasi-sentinel/blob/main/examples/accounting-local-demo/sentinel.yaml).
+That host has authoring off. [Building comfort](../examples/building-comfort/)
+is a host with authoring on.
+
+The file name can be anything that ends in `.yaml` or `.yml`. The first
+argument is the path to that file. If you omit it, the process stops and
+prints that it needs a `.yaml` or `.yml` path.
+
+The example files do not store the model endpoint in YAML. The `agent` block
+names the environment variables that hold it:
+
+```yaml
+agent:
+  url: { env: AZURE_OPENAI_ENDPOINT }
+  model: { env: AZURE_OPENAI_MODEL }
+```
+
+Set the variables your file names, then start the process. Those two names
+are what the examples use. A different `env` name in your file means a
+different variable. If a named variable is unset, the process stops and
+prints that name.
+
+macOS Apple silicon:
 
 ```bash
 export AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
@@ -65,13 +92,12 @@ $env:AZURE_OPENAI_MODEL = "your-model"
 .\sentinel-win-x64\sentinel.exe path\to\sentinel.yaml
 ```
 
-The first argument is the manifest. If you omit it, the process stops and
-prints that it needs a `.yaml` or `.yml` path.
+Change the directory name if you unpacked a different archive.
 
 The host installs the plugins declared in the manifest on startup. The first
 start needs network access unless those plugins are already next to the
-manifest. The agent does not see source passwords. See the
-[manifest reference](../reference/manifest/) for the file shape.
+manifest. The agent does not see source passwords. Passwords stay in the
+secret file the manifest names, not in the command.
 
 The process prints the URL it listens on. The Agent Card is
 `/.well-known/agent-card.json` on that URL.

@@ -35,7 +35,8 @@ question on the first task would still be waiting.
 
 ## A diff is one change to the result set
 
-The query has a result set. A diff reports how that set changed. It is not a
+The query is a [Drasi continuous query](https://drasi.io/concepts/continuous-queries/).
+It keeps a result set and reports how that set changed. A diff is not a
 fresh copy of the set.
 
 Each change is one JSON artifact. The data part has type `native_query_diff`.

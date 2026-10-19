@@ -52,11 +52,13 @@ It cannot create sources or choose a destination.
 
 ## queries and reactions
 
-A query has `id`, `description`, `cypher`, `sources`, and `reactions`.
+A query is a [continuous query](https://drasi.io/concepts/continuous-queries/).
+It has `id`, `description`, `cypher`, `sources`, and `reactions`. `cypher` is
+[continuous query syntax](https://drasi.io/reference/query-language/).
 `examples` is optional. Those strings are the utterances that select the
-skill. `sources` names source ids declared in the same file. `reactions`
-names reaction ids. The host binds one of those reactions. The caller does
-not.
+skill. `sources` names [source](https://drasi.io/concepts/sources/) ids
+declared in the same file. `reactions` names reaction ids. The host binds one
+of those reactions. The caller does not.
 
 A reaction has an `id`. The host uses that id when it attaches the watch.
 

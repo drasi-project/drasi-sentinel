@@ -9,8 +9,9 @@ description: >
 ---
 
 Sentinel is a governed A2A change-detection agent. A caller describes a
-supported change. The agent selects one curated query, opens one subscription
-on one task, and reports later observations on that task.
+change. The agent binds one query, opens one subscription on one task, and
+reports later changes on that task. On a catalog host the query is a published
+skill. On an authoring host the agent writes it.
 
 ## Where to start
 

@@ -4,14 +4,14 @@ title: "Drasi Sentinel"
 linkTitle: "Drasi Sentinel"
 no_list: true
 hide_readingtime: true
-description: "An A2A agent that reports Drasi query changes on one durable task"
+description: "An A2A agent that reports result changes on one durable task"
 cascade:
   - type: "docs"
 ---
 
 <div class="hero-section hero-section--compact">
   <h1 class="hero-title">Ask for a change. Read each diff on one task.</h1>
-  <p class="hero-subtitle">Sentinel is an A2A agent. You describe a supported change in plain language. It binds one curated query to one durable task and reports later result changes as JSON artifacts.</p>
+  <p class="hero-subtitle">Sentinel is an A2A agent. You describe a change in plain language. It watches for that change on one durable task and reports each later change as a JSON artifact.</p>
 
   <div class="cta-group">
     <a href="docs/getting-started/" class="cta-button cta-button--primary">
@@ -27,7 +27,7 @@ cascade:
 
 ## How a watch works
 
-<p class="section-intro">A watch is not a one-shot answer. The opening message selects the query. Later changes arrive on the same task.</p>
+<p class="section-intro">A watch is not a one-shot answer. The opening message is the change you want. Later diffs arrive on the same task.</p>
 
 <div class="flow-diagram">
   <div class="flow-step">
@@ -47,7 +47,7 @@ cascade:
       <i class="fas fa-link"></i>
     </div>
     <div class="flow-step__label">One task, one subscription</div>
-    <div class="flow-step__description">The host binds the curated query and reaction</div>
+    <div class="flow-step__description">The host keeps the matching rows on one task</div>
   </div>
 
   <div class="flow-arrow">
@@ -63,7 +63,27 @@ cascade:
   </div>
 </div>
 
-You do not send a query id, Cypher, a source name, a filter, or a destination. The host already has those. If the manifest enables query authoring, and no curated query covers the request, the agent can build one query against the configured sources and then open the watch.
+A query is the condition that decides which rows match. The host keeps that set for the life of the watch. A diff is a row entering the set, changing, or leaving it. Drasi calls this a [continuous query](https://drasi.io/concepts/continuous-queries/).
+
+You do not choose authoring in the message. The manifest does, with `service.query_authoring.enabled`. If that key is absent, authoring is off.
+
+## When authoring is off
+
+The host opens a watch only for a query it already published. It lists each of those queries as a skill. Your message has to match one of those skills. Describe the change the skill describes, and say how long to keep the watch.
+
+If no skill covers the message, the agent says so and stops. It does not write a query, and it does not ask how long to keep a watch that will not start. The [accounting demo](docs/examples/accounting/) sets the flag to false. The [invoice overdue](docs/examples/invoice-overdue/) catalog leaves the key unset, which is the same setting.
+
+## When authoring is on
+
+A published skill still wins when your message matches one. If none matches, the agent writes one query from your description, against data the host is already connected to, and then opens the watch.
+
+Describe the change in plain language, and include how long to keep the watch. Do not send the query text. The agent reads the schema and samples stored values before it subscribes. If it asks which stored value a word refers to, answer on the same task. That answer is not a new watch.
+
+The agent cannot connect a new database, insert rows, or see a password. [Building comfort](docs/examples/building-comfort/) and [curbside](docs/examples/curbside/) publish no queries, so that first message is the description the agent writes the query from. The steps are in [Author a query](docs/guides/author-a-query/).
+
+## Once the watch is open
+
+The rest of the call does not depend on which mode created the query. You get one task, one subscription, and the same JSON artifact. You do not send a query id, a source name, a filter, or a destination.
 
 Delivery is standard A2A JSON-RPC over SSE. Open the watch with `message/stream`. Reconnect with `tasks/subscribe` and `Last-Event-ID`. An idle stream stays open for the life of the watch. While it waits, the host writes an SSE comment at least every 15 seconds. That comment is not an event. Do not set a read timeout.
 
@@ -72,12 +92,11 @@ Delivery is standard A2A JSON-RPC over SSE. Open the watch with `message/stream`
 Sentinel fits a caller that needs a governed watch, not a private query string.
 
 - A consuming agent should receive each result change, including rows that leave the result set, without polling.
-- The catalog is curated. Callers select a published skill. They do not invent Cypher.
 - The stream may stay open for hours or days. Reconnect from the last event id you applied.
 
 ## Documentation
 
-<p class="section-intro">Start with the local accounting demo, then use the contract pages when you write a client.</p>
+<p class="section-intro">Start with the demo that matches the host you will run, then use the contract pages when you write a client.</p>
 
 <div class="doc-cards">
   <a href="docs/getting-started/" class="doc-card">
@@ -93,7 +112,7 @@ Sentinel fits a caller that needs a governed watch, not a private query string.
   <a href="docs/guides/" class="doc-card">
     <div class="doc-card__icon"><i class="fas fa-book"></i></div>
     <div class="doc-card__title">Guides</div>
-    <div class="doc-card__desc">Start a watch, keep the stream, and read current rows.</div>
+    <div class="doc-card__desc">Start a watch, keep the stream, read current rows, or author a query.</div>
   </a>
   <a href="docs/reference/" class="doc-card">
     <div class="doc-card__icon"><i class="fas fa-code"></i></div>
@@ -103,6 +122,6 @@ Sentinel fits a caller that needs a governed watch, not a private query string.
   <a href="docs/examples/" class="doc-card">
     <div class="doc-card__icon"><i class="fas fa-flask"></i></div>
     <div class="doc-card__title">Examples</div>
-    <div class="doc-card__desc">Local demos and the JWT-protected catalog.</div>
+    <div class="doc-card__desc">A catalog demo, two hosts that write the query, and a JWT-protected catalog.</div>
   </a>
 </div>
