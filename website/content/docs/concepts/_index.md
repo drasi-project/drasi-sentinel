@@ -48,6 +48,9 @@ Each event has an id. Keep the last id you applied. If the stream drops, call
 `tasks/subscribe` with that id in `Last-Event-ID`. The host replays events
 after that id, then waits. Omit the header only to replay from the start.
 
+A host restart drops that stream. The watch stays. See
+[Host restart](restart/).
+
 A push URL is optional, and it belongs to that task only. Streaming remains
 the primary delivery. The model does not choose the URL.
 

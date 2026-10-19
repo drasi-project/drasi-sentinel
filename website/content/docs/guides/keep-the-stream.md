@@ -39,6 +39,15 @@ Omit the header only when you want the journal from the start.
 
 Inspector calls this **Resume task stream**.
 
+## After the host restarts
+
+The old response is closed. POST `tasks/subscribe` again with the same task
+id and the last id you applied. The host does not resume the old HTTP
+response.
+
+[Host restart](../../concepts/restart/) says what the journal keeps, which
+watches come back, and what a change during downtime does.
+
 ## Push is optional
 
 To receive the same artifact updates without holding the stream, POST
