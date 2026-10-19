@@ -16,7 +16,7 @@ on one task, and reports later observations on that task.
 
 - [Install the host](getting-started/install/) downloads a binary for Linux, macOS, or Windows.
 - [Getting started](getting-started/) runs the local accounting demo and shows one result diff.
-- [Concepts](concepts/) explains a watch, a subscription, and the three diff types.
+- [Concepts](concepts/) follows one watch from the opening message through a restart.
 - [Guides](guides/) cover starting a watch, keeping the stream, current results, lifetime, and query authoring.
 - [Reference](reference/) lists the manifest fields and the A2A methods a client calls.
 - [Examples](examples/) points at the runnable demos in this repository.
