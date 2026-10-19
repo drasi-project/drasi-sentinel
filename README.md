@@ -6,14 +6,14 @@ changes as JSON artifacts on that task.
 
 This is [v0.1.0-alpha.1](https://github.com/drasi-project/drasi-sentinel/releases/tag/v0.1.0-alpha.1).
 The host contract can still change. The
-[documentation site](https://supreme-guacamole-w9j9wne.pages.github.io/)
+[documentation site](https://drasi-project.github.io/drasi-sentinel/)
 is the full guide.
 
 ## Install the host
 
 Download the archive for your machine from the alpha release. You do not need
 the .NET SDK. The steps, file names, and run command are in
-[Install the host](https://supreme-guacamole-w9j9wne.pages.github.io/docs/getting-started/install/).
+[Install the host](https://drasi-project.github.io/drasi-sentinel/docs/getting-started/install/).
 
 The first argument is your manifest. The Agent Card is
 `/.well-known/agent-card.json` on the URL the process prints.
@@ -50,7 +50,7 @@ POST `tasks/subscribe` with the same task id. Set `Last-Event-ID` to the last
 SSE id you applied. The host replays events after that id, then waits.
 
 A host restart closes the old HTTP response. It does not end the watch.
-Reconnect the same way. [Host restart](https://supreme-guacamole-w9j9wne.pages.github.io/docs/concepts/restart/)
+Reconnect the same way. [Host restart](https://drasi-project.github.io/drasi-sentinel/docs/concepts/restart/)
 says what the journal keeps.
 
 Streaming is the delivery. A push URL is optional, and it belongs to that

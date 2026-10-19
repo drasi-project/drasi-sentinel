@@ -1,7 +1,7 @@
 # Drasi Sentinel documentation site
 
 This directory is the source for the
-[Drasi Sentinel documentation site](https://supreme-guacamole-w9j9wne.pages.github.io/).
+[Drasi Sentinel documentation site](https://drasi-project.github.io/drasi-sentinel/).
 Hugo and the Docsy theme build it. Pages is set to GitHub Actions.
 
 The site uses the same Docsy pin and brand styles as
@@ -39,7 +39,7 @@ npm --prefix themes/docsy install
 hugo server
 ```
 
-The preview is at `http://localhost:1313/`.
+The preview is at `http://localhost:1313/drasi-sentinel/`.
 
 A production build writes `website/public/`:
 

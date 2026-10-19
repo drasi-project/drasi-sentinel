@@ -18,20 +18,21 @@ is a later build from `main`, and it is also not stable.
 
 | Machine | Archive |
 | --- | --- |
-| Linux x64 | `sentinel-linux-x64.tar.gz` |
-| Linux arm64 | `sentinel-linux-arm64.tar.gz` |
-| macOS Apple silicon | `sentinel-osx-arm64.tar.gz` |
-| macOS Intel | `sentinel-osx-x64.tar.gz` |
-| Windows x64 | `sentinel-win-x64.zip` |
+| Linux x64 | [sentinel-linux-x64.tar.gz](https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-linux-x64.tar.gz) |
+| Linux arm64 | [sentinel-linux-arm64.tar.gz](https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-linux-arm64.tar.gz) |
+| macOS Apple silicon | [sentinel-osx-arm64.tar.gz](https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-osx-arm64.tar.gz) |
+| macOS Intel | [sentinel-osx-x64.tar.gz](https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-osx-x64.tar.gz) |
+| Windows x64 | [sentinel-win-x64.zip](https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-win-x64.zip) |
 
-`SHA256SUMS` on the same release lists a SHA-256 for each archive.
+[SHA256SUMS](https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/SHA256SUMS)
+lists a SHA-256 for each archive.
 
 ## Download
 
 macOS Apple silicon:
 
 ```bash
-gh release download v0.1.0-alpha.1 --repo drasi-project/drasi-sentinel --pattern sentinel-osx-arm64.tar.gz
+curl -fsSL -O https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-osx-arm64.tar.gz
 tar -xzf sentinel-osx-arm64.tar.gz
 ```
 
@@ -41,7 +42,7 @@ the same way. Use the file name from the table.
 Windows:
 
 ```powershell
-gh release download v0.1.0-alpha.1 --repo drasi-project/drasi-sentinel --pattern sentinel-win-x64.zip
+Invoke-WebRequest -Uri https://github.com/drasi-project/drasi-sentinel/releases/download/v0.1.0-alpha.1/sentinel-win-x64.zip -OutFile sentinel-win-x64.zip
 Expand-Archive sentinel-win-x64.zip -DestinationPath .
 ```
 

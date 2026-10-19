@@ -4,7 +4,7 @@
 # GitHub Pages by .github/workflows/website.yml.
 
 # The Actions workflow overrides this with the Pages base URL.
-baseURL = "https://supreme-guacamole-w9j9wne.pages.github.io/"
+baseURL = "https://drasi-project.github.io/drasi-sentinel/"
 title = "Drasi Sentinel Docs"
 theme = "docsy"
 
