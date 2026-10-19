@@ -3887,3 +3887,9 @@ pre.mermaid {
     color: $gray-600;
   }
 }
+
+// Docsy prints the current section title as the sidebar root. For this site
+// that title is "Docs", which only wraps the real sections.
+#td-section-nav > ul.ul-0 > li > a.tree-root {
+  display: none;
+}
