@@ -1,5 +1,7 @@
 # Drasi Sentinel .NET handoff
 
+Read [docs/architecture.md](docs/architecture.md) before changing the turn, the journal, or the engine wiring. That page is the internal overview. Caller-facing pages live under `website/` and are a different audience.
+
 Start this repository as the working-directory root:
 
 ```bash
