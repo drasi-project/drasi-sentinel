@@ -19,7 +19,8 @@ belong to the task the watch opened.
 The opening message is the description, in plain text. It is not a skill id
 or a reaction id. The agent matches that text to one published query. The
 host then binds the reaction the manifest already listed for that query. You
-do not choose the reaction, and you do not send Cypher.
+do not choose the reaction. What the message must not contain is in
+[Start a watch](../guides/start-a-watch/).
 
 That query and that reaction are the subscription. The task keeps that one
 subscription. A later message on the task does not add a second subscription.

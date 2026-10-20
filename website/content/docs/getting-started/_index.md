@@ -6,9 +6,9 @@ description: >
   Run the local accounting demo and receive one paid-invoice diff.
 ---
 
-This tutorial runs one curated watch. You will start the demo, ask for paid
-invoices, mark a seeded invoice paid, and read the JSON artifact. No query
-authoring is involved. That demo has one published query, and authoring is off.
+This tutorial runs one published watch. You will start the demo, ask for paid
+invoices, mark a seeded invoice paid, and read the JSON artifact. This demo
+has one published query, and authoring is off.
 
 To run the host without this demo, [install the binary](install/).
 
@@ -16,7 +16,7 @@ To run the host without this demo, [install the binary](install/).
 
 - .NET 10 SDK. The [install page](install/) does not need it.
 - Docker, with port `5432` free.
-- `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` set to a model the host can call.
+- `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_MODEL` set to an Azure OpenAI or Azure AI Foundry model. The host uses an Entra token, not an API key. Run `az login` first.
 
 ## Run the demo
 
@@ -50,18 +50,19 @@ the subscription is active. Keep that stream open.
 
 ## Cause one change
 
-In another terminal, run the `docker exec` command the demo printed. It marks
-the seeded unpaid invoice paid. That row enters the result set.
+In another terminal, mark the seeded unpaid invoice paid:
 
-Inspector then shows an artifact update. The data part has
-`type` `native_query_diff` and `diffType` `Add`. `data` is the row. A text
-status update is not the change.
+```bash
+docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
+  -c "UPDATE invoices SET paid = true WHERE invoice_id = 'invoice-demo-001'"
+```
 
-## What you did not send
+That row enters the result set. Inspector shows an artifact update. The data
+part has `type` `native_query_diff` and `diffType` `Add`. `data` is the row.
+A text status update is not the change.
 
-The message did not include a query id, Cypher, a source name, a filter, or a
-destination. The host bound the curated paid-invoice query and its reaction.
-A second watch needs a new task.
+The message did not name the query. [Start a watch](../guides/start-a-watch/)
+is what a message may contain.
 
 ## Next steps
 

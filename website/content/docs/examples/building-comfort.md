@@ -19,9 +19,20 @@ cp .env.example .env
 ./demo.sh
 ```
 
-Send one watch per task. A comfort level you define in the message is part
-of the query, not a stored column. After the subscription is active, the
-demo README prints the `docker exec` update that pushes one floor out of
-band.
+Send one watch per task. This message asks for an uncomfortable floor. The
+comfort level is part of the query, not a stored column.
 
-The committed query is `data/authored-queries/<id>.yaml`.
+```text
+Tell me when a floor average room comfort level is uncomfortable. A room comfort level is 50 plus (temperature - 72) plus (humidity - 42), plus (co2 - 500) / 25 when co2 is above 500, otherwise no co2 extra. Round each room level down, then average the rooms on that floor. Uncomfortable means that average is below 40 or above 50. Keep the watch for 7 days.
+```
+
+After the subscription is active, push one floor out of band:
+
+```bash
+docker exec drasi-sentinel-building-comfort psql -v ON_ERROR_STOP=1 -U sentinel -d building_comfort \
+  -c "UPDATE \"Room\" SET temperature = 40, humidity = 20, co2 = 700 WHERE floor_id = 'floor_01_01'"
+```
+
+`floor_01_01` enters that result set. The committed query is
+`data/authored-queries/<id>.yaml`. Room and building prompts are in
+`examples/building-comfort-local-demo/prompts.sh`.

@@ -1,8 +1,11 @@
 # Drasi Sentinel
 
-Sentinel is an A2A agent. You describe a supported change in plain language.
-It binds one curated query to one durable task and reports later result
-changes as JSON artifacts on that task.
+Sentinel is an A2A agent. You describe a change in plain language. It binds
+one query to one durable task and reports later result changes as JSON
+artifacts on that task.
+
+The host either published that query as a skill, or it writes the query when
+authoring is on. You do not choose that in the message. The manifest does.
 
 This is [v0.1.0-alpha.1](https://github.com/drasi-project/drasi-sentinel/releases/tag/v0.1.0-alpha.1).
 The host contract can still change. The
@@ -12,26 +15,29 @@ is the full guide.
 ## Install the host
 
 Download the archive for your machine from the alpha release. You do not need
-the .NET SDK. The steps, file names, and run command are in
+the .NET SDK. The binary needs a YAML manifest before it can start. The
+steps, the file, and the run command are in
 [Install the host](https://drasi-project.github.io/drasi-sentinel/docs/getting-started/install/).
 
-The first argument is your manifest. The Agent Card is
-`/.well-known/agent-card.json` on the URL the process prints.
+The model endpoint must be Azure OpenAI or Azure AI Foundry. The host uses an
+Entra token and the Responses API. It does not accept an API key or a generic
+OpenAI-compatible server.
+
+The process prints a URL. The Agent Card is `/.well-known/agent-card.json`
+on that URL.
 
 ## Open a watch
 
-Read the Agent Card once. A skill tagged `continuous-query` is one watch.
-Send one of its examples, or its description when it lists none, as the whole
-user text. Include how long to keep the watch, such as `7d` or `none`.
+If the host published skills, send one skill example, or its description, as
+the whole user text. Include how long to keep the watch. The call is
+`message/stream`. [Start a watch](https://drasi-project.github.io/drasi-sentinel/docs/guides/start-a-watch/)
+is the procedure, including what the message must not contain.
 
-Use `message/stream`. Do not send a query id, Cypher, a source name, a
-filter, or a destination. The host binds the reaction. You do not choose it.
+If no skill covers the change, and the host has authoring on, describe the
+change instead. [Author a query](https://drasi-project.github.io/drasi-sentinel/docs/guides/author-a-query/)
+is that path.
 
-Keep that response open. An idle stream stays open for the life of the watch.
-The host writes an SSE comment, `: ping`, at least every 15 seconds. A
-comment is not an event. Do not set a read timeout.
-
-A second watch is a new task.
+Keep the response open. A second watch is a new task.
 
 ## Read a change
 
@@ -48,11 +54,7 @@ A status update is not a change. To read the rows already in the set, send
 
 POST `tasks/subscribe` with the same task id. Set `Last-Event-ID` to the last
 SSE id you applied. The host replays events after that id, then waits.
-
-A host restart closes the old HTTP response. It does not end the watch.
-Reconnect the same way. [Host restart](https://drasi-project.github.io/drasi-sentinel/docs/concepts/restart/)
-says what the journal keeps.
-
-Streaming is the delivery. A push URL is optional, and it belongs to that
-task only.
+[Keep the stream open](https://drasi-project.github.io/drasi-sentinel/docs/guides/keep-the-stream/)
+covers idle streams and reconnect. A host restart closes the old response and
+does not end the watch.
 

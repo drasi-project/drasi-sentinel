@@ -19,8 +19,8 @@ The output is an artifact update whose data `type` is
 `current_query_results`. It contains `taskId`, `subscriptionId`, `queryId`,
 `queryDescription`, and `rows`.
 
-Do not send a query id, a source name, Cypher, or a filter. The host resolves
-the task's subscription.
+The host uses the subscription already on that task. [Start a watch](../start-a-watch/)
+lists what a message must not contain.
 
 This artifact does not replace later `native_query_diff` events. Keep the
 stream open after you read the rows.

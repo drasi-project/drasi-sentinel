@@ -56,5 +56,5 @@ or `https` URL. You can also set
 `configuration.taskPushNotificationConfig` on the opening `message/stream`.
 
 That URL belongs to that task only. A failed post does not drop the journaled
-artifact. Streaming remains the primary delivery. The model does not choose
-the URL.
+artifact. Streaming remains the primary delivery. You choose the URL. The
+agent will not pick one.

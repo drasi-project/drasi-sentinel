@@ -6,37 +6,51 @@ description: >
   Describe a change that is not already a published skill.
 ---
 
-Query authoring is off unless the manifest sets
-`service.query_authoring.enabled` to `true`. That setting requires exactly
-one reaction. The host binds that reaction to the query the agent commits.
+Use this page when the host has `service.query_authoring.enabled` set to
+`true`. That setting requires exactly one reaction. The host binds that
+reaction to the query the agent commits. If the flag is false or absent, a
+miss does not become a watch. The agent says the catalog does not cover it
+and stops.
 
-## Describe the change
+A published skill still wins when your message matches one. [Start a watch](../start-a-watch/)
+is that path. This page is the miss.
 
-If no `continuous-query` skill matches, send the description as the whole
-user text on a new task. Do not send Cypher, a source name, a filter, or a
-destination.
+## Send the description
 
-Include the lifetime in that text. The [building comfort](../examples/building-comfort/)
-and [curbside](../examples/curbside/) demos are hosts that work this way.
+Send the description as the whole user text on a new task. Include the
+lifetime. Do not send the query text. [Start a watch](../start-a-watch/) lists
+the other fields a message must not contain.
 
-The agent reads the configured schema, samples stored values, and probes the
-query before it opens the watch. A condition you define in the message, with
-`means` or as an expression, is part of the query. It is not a stored field
-the agent should ask you to map.
+This is a message that opens a watch on the [curbside](../examples/curbside/)
+host:
 
-If the agent asks which stored value a word refers to, answer on the same
-task. That answer is not a new watch.
+```text
+Tell me when a pickup order is ready for pickup. Keep the watch for 7 days.
+```
 
-## What gets stored
+The agent reads the schema, samples stored values, and tries the query before
+it subscribes. [Building comfort](../examples/building-comfort/) is the other
+host that works this way. A condition you define in the message is part of
+the query. It is not a stored field the agent should ask you to map.
+
+## If the agent asks
+
+Some words are not stored values. This message does not open a watch on the
+curbside host:
+
+```text
+Tell me when an order is ready and the customer is waiting. Keep the watch for 7 days.
+```
+
+`waiting` is not a column. The agent asks which stored value that word refers
+to. Answer on the same task. That answer is not a new watch.
+
+## What the agent will not do
+
+The agent cannot connect a new database, insert rows, or see a connection
+password. It writes one query against sources already in the manifest.
 
 A committed query is written to `data/authored-queries/<id>.yaml`. The file
-has the id, description, Cypher, sources, and joins. The agent does not
-repeat that Cypher on the task. Later diffs use the same
-`native_query_diff` artifact as a curated query.
-
-The agent cannot create a source, insert rows, or see a connection password.
-
-## When authoring is off
-
-If no catalog query covers the request, the agent says so and stops. It does
-not invent a query, and it does not ask for a lifetime.
+has the id, description, query text, sources, and joins. The agent does not
+repeat that text on the task. Later diffs use the same `native_query_diff`
+artifact as a published query.

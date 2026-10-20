@@ -60,7 +60,7 @@ A change is an artifact data part whose `type` is `native_query_diff`.
 | Field | Meaning |
 | --- | --- |
 | `subscriptionId` | The task's subscription. |
-| `queryId` | The curated or authored query. |
+| `queryId` | The published or authored query. |
 | `queryDescription` | The catalog description. |
 | `reactionId` | The reaction the host bound. |
 | `occurredAt` | When the host recorded the diff. |

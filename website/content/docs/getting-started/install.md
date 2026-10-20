@@ -52,9 +52,10 @@ The binary does not configure itself. You pass it one YAML file, the
 manifest. That file names the sources to connect, whether
 `service.query_authoring.enabled` is true, and the queries to publish when
 authoring is off.
-Write that file before you set any variables. The fields are in the
-[manifest reference](../reference/manifest/). A complete file is the
-[accounting manifest](https://github.com/drasi-project/drasi-sentinel/blob/main/examples/accounting-local-demo/sentinel.yaml).
+Write that file before you set any variables. A complete authoring-off file
+is in the [manifest reference](../reference/manifest/). The
+[accounting manifest](https://github.com/drasi-project/drasi-sentinel/blob/main/examples/accounting-local-demo/sentinel.yaml)
+is a running copy.
 That host has authoring off. [Building comfort](../examples/building-comfort/)
 is a host with authoring on.
 
@@ -75,6 +76,12 @@ Set the variables your file names, then start the process. Those two names
 are what the examples use. A different `env` name in your file means a
 different variable. If a named variable is unset, the process stops and
 prints that name.
+
+The endpoint has to be Azure OpenAI or Azure AI Foundry. The host uses an
+Entra token and the Responses API. It does not take an API key, and it does
+not call a generic OpenAI-compatible server. For a `demo` profile, run
+`az login` first. The [agent fields](../reference/manifest/#agent) are the
+exact rule.
 
 macOS Apple silicon:
 

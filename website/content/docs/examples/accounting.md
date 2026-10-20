@@ -3,7 +3,7 @@ title: "Accounting"
 linkTitle: "Accounting"
 weight: 10
 description: >
-  One curated paid-invoice watch against local PostgreSQL.
+  One published paid-invoice watch against local PostgreSQL.
 ---
 
 This demo publishes one query, `invoice-paid`, and sets
@@ -25,9 +25,14 @@ In Inspector, click **Send streaming** and send:
 Tell me when an invoice is paid. Keep the watch for 7 days.
 ```
 
-When the subscription is active, run the printed `docker exec` update. The
-seeded unpaid invoice enters the result set. The artifact `diffType` is
-`Add`.
+When the subscription is active, mark the seeded invoice paid:
+
+```bash
+docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sentinel -d sentinel \
+  -c "UPDATE invoices SET paid = true WHERE invoice_id = 'invoice-demo-001'"
+```
+
+That row enters the result set. The artifact `diffType` is `Add`.
 
 `http://127.0.0.1:8082/` is a local capture URL a consuming agent can
 register for that task. Until it does, `secrets/capture-events.jsonl` stays

@@ -69,21 +69,15 @@ You do not choose authoring in the message. The manifest does, with `service.que
 
 ## When authoring is off
 
-The host opens a watch only for a query it already published. It lists each of those queries as a skill. Your message has to match one of those skills. Describe the change the skill describes, and say how long to keep the watch.
-
-If no skill covers the message, the agent says so and stops. It does not write a query, and it does not ask how long to keep a watch that will not start. The [accounting demo](docs/examples/accounting/) sets the flag to false. The [invoice overdue](docs/examples/invoice-overdue/) catalog leaves the key unset, which is the same setting.
+The host opens a watch only for a query it already published. It lists each of those queries as a skill. Your message has to match one. If none matches, the agent says so and stops. It does not write a query. The [accounting demo](docs/examples/accounting/) sets the flag to false. The procedure is [Start a watch](docs/guides/start-a-watch/).
 
 ## When authoring is on
 
-A published skill still wins when your message matches one. If none matches, the agent writes one query from your description, against data the host is already connected to, and then opens the watch.
-
-Describe the change in plain language, and include how long to keep the watch. Do not send the query text. The agent reads the schema and samples stored values before it subscribes. If it asks which stored value a word refers to, answer on the same task. That answer is not a new watch.
-
-The agent cannot connect a new database, insert rows, or see a password. [Building comfort](docs/examples/building-comfort/) and [curbside](docs/examples/curbside/) publish no queries, so that first message is the description the agent writes the query from. The steps are in [Author a query](docs/guides/author-a-query/).
+A published skill still wins when your message matches one. If none matches, the agent writes one query from your description and then opens the watch. [Building comfort](docs/examples/building-comfort/) and [curbside](docs/examples/curbside/) publish no queries, so the first message is that description. The procedure is [Author a query](docs/guides/author-a-query/).
 
 ## Once the watch is open
 
-The rest of the call does not depend on which mode created the query. You get one task, one subscription, and the same JSON artifact. You do not send a query id, a source name, a filter, or a destination.
+The rest of the call does not depend on which mode created the query. You get one task, one subscription, and the same JSON artifact. What the message must not contain is in [Start a watch](docs/guides/start-a-watch/).
 
 Delivery is standard A2A JSON-RPC over SSE. Open the watch with `message/stream`. Reconnect with `tasks/subscribe` and `Last-Event-ID`. An idle stream stays open for the life of the watch. While it waits, the host writes an SSE comment at least every 15 seconds. That comment is not an event. Do not set a read timeout.
 
