@@ -57,12 +57,14 @@ docker exec drasi-sentinel-accounting-local-demo psql -v ON_ERROR_STOP=1 -U sent
   -c "UPDATE invoices SET paid = true WHERE invoice_id = 'invoice-demo-001'"
 ```
 
-That row enters the result set. Inspector shows an artifact update. The data
-part has `type` `native_query_diff` and `diffType` `Add`. `data` is the row.
-A text status update is not the change.
+That row enters the result set. Inspector shows an artifact update. Open the
+data part. `type` is `native_query_diff`, `diffType` is `Add`, and `data` is
+the paid invoice. That artifact is the change. The text lines above it are
+the agent talking.
 
-The message did not name the query. [Start a watch](../guides/start-a-watch/)
-is what a message may contain.
+You did not put a query id in the message. The host matched the sentence to
+the published paid-invoice query. [Start a watch](../guides/start-a-watch/)
+is that same call without this demo.
 
 ## Next steps
 
